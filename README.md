@@ -6,6 +6,8 @@ O projeto possui dois scripts principais:
 
 - `emailvencimentosenha.py`: consulta usuarios no Active Directory com acesso perto do vencimento e envia aviso por e-mail.
 - `reset_vpn.py`: consulta chamados no GLPI de acesso expirado, valida o usuario no Active Directory e renova o campo `accountExpires` quando aplicavel.
+- `relatorio.py`: mostra em uma tela unica os usuarios que expiram em ate N dias e os chamados GLPI ativos.
+- `main.py`: CLI principal com subcomandos `email`, `reset` e `relatorio`.
 
 > Atencao: a execucao padrao dos scripts e em `dry-run`. Alteracoes reais ou envio real de e-mail so acontecem com `--apply`.
 
@@ -34,23 +36,104 @@ ldap3
 pyasn1
 ```
 
+## Docker
+
+O projeto possui dois containers separados:
+
+- `email-vencimento`: executa `emailvencimentosenha.py`.
+- `reset-vpn`: executa `reset_vpn.py`.
+
+Os dois containers usam o arquivo `.env` da raiz do projeto como `env_file`.
+
+Construir as imagens:
+
+```bash
+docker compose build
+```
+
+Rodar aviso de vencimento em dry-run:
+
+```bash
+docker compose run --rm email-vencimento
+```
+
+Enviar e-mails de verdade:
+
+```bash
+docker compose run --rm email-vencimento --days 3 --apply
+```
+
+Rodar reset VPN em dry-run:
+
+```bash
+docker compose run --rm reset-vpn
+```
+
+Aplicar renovacao de VPN para um chamado:
+
+```bash
+docker compose run --rm reset-vpn --ticket-id 12345 --apply
+```
+
+Rodar reset VPN em polling:
+
+```bash
+docker compose run --rm reset-vpn --poll --interval 60 --apply
+```
+
 ## Estrutura
 
 ```text
 AD-RPA/
+├── ad_directory.py
+├── glpi_client.py
 ├── emailvencimentosenha.py
+├── relatorio.py
+├── main.py
 ├── reset_vpn.py
 ├── .env
-├── .venv/
-└── __pycache__/
+└── .venv/
 ```
 
-Os scripts tambem dependem dos modulos `auto` e `glpi`. No estado atual da pasta, os arquivos fonte `auto.py` e `glpi.py` nao estao presentes, mas existem arquivos compilados em `__pycache__`.
+Os scripts tambem dependem dos modulos compartilhados:
 
-Funcoes esperadas desses modulos:
+- `ad_directory.py`: carregamento de `.env`, conexao LDAP/AD, busca de usuario, conversao de `accountExpires`, calculo de renovacao e aplicacao no AD.
+- `glpi_client.py`: cliente HTTP para API REST do GLPI, abertura/fechamento de sessao, busca de chamados, criacao de followup, solucao e atualizacao de status.
+- `report_storage.py`: persistencia SQLite dos snapshots gerados pelo `relatorio.py`.
 
-- `auto`: carregamento de `.env`, conexao LDAP/AD, busca de usuario, conversao de `accountExpires`, calculo de renovacao e aplicacao no AD.
-- `glpi`: cliente HTTP para API REST do GLPI, abertura/fechamento de sessao, busca de chamados, criacao de followup, solucao e atualizacao de status.
+## CLI principal
+
+Executar os fluxos pelo ponto de entrada unico:
+
+```bash
+.venv/bin/python main.py email
+.venv/bin/python main.py reset --debug
+.venv/bin/python main.py relatorio --once
+```
+
+## Relatorio
+
+O `relatorio.py` monta uma tela que e atualizada no mesmo lugar do terminal, sem empilhar linhas.
+
+Ele mostra:
+
+- usuarios cujo acesso expira em ate `N` dias
+- chamados GLPI ativos dos status `1` e `2`
+- o caminho do arquivo SQLite e o `snapshot_id` salvo no ciclo atual
+
+Cada ciclo grava um snapshot no SQLite, por padrao em:
+
+```text
+relatorio.db
+```
+
+Comandos uteis:
+
+```bash
+.venv/bin/python relatorio.py --once
+.venv/bin/python relatorio.py --interval 15
+.venv/bin/python relatorio.py --db-path /tmp/ad_rpa_relatorio.db --once
+```
 
 ## Diagramas
 
@@ -61,8 +144,8 @@ flowchart LR
     ENV[".env<br/>Credenciais e configuracoes"]
     EMAIL["emailvencimentosenha.py"]
     RESET["reset_vpn.py"]
-    AUTO["auto<br/>AD, datas e renovacao"]
-    GLPI_MOD["glpi<br/>Cliente API GLPI"]
+    AUTO["ad_directory.py<br/>AD, datas e renovacao"]
+    GLPI_MOD["glpi_client.py<br/>Cliente API GLPI"]
     AD["Active Directory"]
     GLPI["GLPI"]
     SMTP["SMTP"]
@@ -296,7 +379,7 @@ O script:
 O e-mail orienta o usuario a abrir o formulario:
 
 ```text
-https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46
+https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=15
 ```
 
 Campos orientados no texto:
@@ -407,6 +490,12 @@ O script procura chamados com titulo:
 Acesso Expirado Rede/VPN ou Internet
 ```
 
+O formulario conhecido desse fluxo e:
+
+```text
+https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=15
+```
+
 E extrai do conteudo o campo:
 
 ```text
@@ -414,6 +503,11 @@ Login da Rede/VPN ou Internet
 ```
 
 Depois valida o usuario no AD e decide se a renovacao pode ser aplicada.
+
+Antes da validacao no AD, o script confere o requerente do chamado no GLPI.
+A renovacao automatica so continua quando o requerente e o mesmo login informado
+no formulario. Se o chamado foi aberto por outro usuario, o script nao altera o AD
+e adiciona uma nota explicando que o proprio dono do login precisa abrir a solicitacao.
 
 ### Fluxo
 
@@ -424,18 +518,21 @@ Depois valida o usuario no AD e decide se a renovacao pode ser aplicada.
 5. Conecta no AD.
 6. Busca chamados recentes ou carrega um chamado especifico.
 7. Extrai o login informado no chamado.
-8. Busca o usuario no AD.
-9. Calcula a decisao de renovacao.
-10. Em `dry-run`, apenas mostra o que faria.
-11. Com `--apply`, altera `accountExpires` no AD.
-12. Ao renovar com sucesso, adiciona solucao e encerra o chamado no GLPI.
-13. Se nao puder renovar, adiciona followup explicando o motivo.
+8. Busca o requerente do chamado no GLPI.
+9. Confere se o requerente e o mesmo usuario do login informado.
+10. Busca o usuario no AD.
+11. Calcula a decisao de renovacao.
+12. Em `dry-run`, apenas mostra o que faria.
+13. Com `--apply`, altera `accountExpires` no AD.
+14. Ao renovar com sucesso, adiciona solucao e encerra o chamado no GLPI.
+15. Se nao puder renovar, adiciona followup explicando o motivo.
 
 ### Regras de renovacao
 
-Pelo comportamento do modulo `auto`, o script:
+Pelo comportamento do modulo `ad_directory.py`, o script:
 
 - So renova quando o acesso esta expirado.
+- So renova quando o requerente do chamado no GLPI e o mesmo usuario do login informado.
 - Nao renova quando o atributo indica que nunca expira.
 - Calcula nova expiracao por regra de 3 meses.
 - Ajusta algumas datas para respeitar regra interna de vencimento.
@@ -759,7 +856,5 @@ Aplicar de verdade:
 
 ## Observacoes importantes
 
-- O projeto atual nao esta dentro de um repositorio Git inicializado nesta pasta.
-- Os fontes `auto.py` e `glpi.py` devem ser preservados ou restaurados, pois os scripts dependem deles.
-- Como existem apenas arquivos `.pyc` desses modulos, a manutencao futura fica limitada sem os fontes originais.
+- Os fontes `ad_directory.py` e `glpi_client.py` devem ser preservados, pois os scripts dependem deles.
 - O arquivo `.env` contem credenciais sensiveis. Recomenda-se rotacionar senhas e tokens se eles tiverem sido compartilhados fora do ambiente seguro.

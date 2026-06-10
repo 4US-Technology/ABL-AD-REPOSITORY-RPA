@@ -15,10 +15,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-import auto
+import ad_directory as ad
+import report_storage
 
 
-FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46"
+FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=15"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 
@@ -52,31 +53,31 @@ class ExpiringUser:
 
 def load_smtp_config() -> SmtpConfig:
     return SmtpConfig(
-        host=auto.env_required("SMTP_HOST"),
-        port=int(auto.env_required("SMTP_PORT")),
-        user=(auto.env_required("SMTP_USER") if auto.os.getenv("SMTP_USER") else None),
+        host=ad.env_required("SMTP_HOST"),
+        port=int(ad.env_required("SMTP_PORT")),
+        user=(ad.env_required("SMTP_USER") if ad.os.getenv("SMTP_USER") else None),
         password=(
-            auto.env_required("SMTP_PASSWORD") if auto.os.getenv("SMTP_PASSWORD") else None
+            ad.env_required("SMTP_PASSWORD") if ad.os.getenv("SMTP_PASSWORD") else None
         ),
-        use_tls=auto.os.getenv("SMTP_USE_TLS", "true").lower() == "true",
-        use_ssl=auto.os.getenv("SMTP_USE_SSL", "false").lower() == "true",
+        use_tls=ad.os.getenv("SMTP_USE_TLS", "true").lower() == "true",
+        use_ssl=ad.os.getenv("SMTP_USE_SSL", "false").lower() == "true",
     )
 
 
 def load_graph_config() -> GraphConfig:
     return GraphConfig(
-        tenant_id=auto.env_required("GRAPH_TENANT_ID"),
-        client_id=auto.env_required("GRAPH_CLIENT_ID"),
-        client_secret=auto.env_required("GRAPH_CLIENT_SECRET"),
-        sender=auto.env_required("GRAPH_SENDER"),
-        save_to_sent_items=auto.os.getenv("GRAPH_SAVE_TO_SENT_ITEMS", "false").lower()
+        tenant_id=ad.env_required("GRAPH_TENANT_ID"),
+        client_id=ad.env_required("GRAPH_CLIENT_ID"),
+        client_secret=ad.env_required("GRAPH_CLIENT_SECRET"),
+        sender=ad.env_required("GRAPH_SENDER"),
+        save_to_sent_items=ad.os.getenv("GRAPH_SAVE_TO_SENT_ITEMS", "false").lower()
         == "true",
     )
 
 
 def find_expiring_users(
     conn,
-    config: auto.AdConfig,
+    config: ad.AdConfig,
     *,
     days: int,
     from_date: datetime | None,
@@ -88,7 +89,7 @@ def find_expiring_users(
     ok = conn.search(
         search_base=config.base_dn,
         search_filter="(&(objectClass=user)(!(objectClass=computer)))",
-        search_scope=auto.SUBTREE,
+        search_scope=ad.SUBTREE,
         attributes=[
             "cn",
             "displayName",
@@ -107,7 +108,7 @@ def find_expiring_users(
         if not login:
             continue
 
-        expiry = auto.filetime_to_datetime(getattr(entry, config.expiry_attr).value)
+        expiry = ad.filetime_to_datetime(getattr(entry, config.expiry_attr).value)
         if expiry is None:
             continue
 
@@ -137,12 +138,12 @@ def find_expiring_users(
 
 def load_user_by_login(
     conn,
-    config: auto.AdConfig,
+    config: ad.AdConfig,
     *,
     login: str,
 ) -> ExpiringUser:
-    entry = auto.find_user(conn, config, login)
-    expiry = auto.filetime_to_datetime(getattr(entry, config.expiry_attr).value)
+    entry = ad.find_user(conn, config, login)
+    expiry = ad.filetime_to_datetime(getattr(entry, config.expiry_attr).value)
     if expiry is None:
         raise RuntimeError(f"O usuário {login} não possui accountExpires com data definida.")
 
@@ -168,7 +169,7 @@ def build_message(
     *,
     tz_name: str,
 ) -> EmailMessage:
-    expiry_text = auto.format_dt(user.expiry, tz_name)
+    expiry_text = ad.format_dt(user.expiry, tz_name)
 
     text = (
         f"Olá, {user.name}.\n\n"
@@ -198,7 +199,7 @@ def build_message(
     )
 
     msg = EmailMessage()
-    sender_email = smtp_config.user or auto.env_required("SMTP_USER")
+    sender_email = smtp_config.user or ad.env_required("SMTP_USER")
     msg["From"] = sender_email
     msg["To"] = user.email
     msg["Subject"] = "Aviso de vencimento do acesso de Rede/VPN ou Internet"
@@ -213,7 +214,7 @@ def build_graph_message_payload(
     tz_name: str,
     save_to_sent_items: bool,
 ) -> dict[str, Any]:
-    expiry_text = auto.format_dt(user.expiry, tz_name)
+    expiry_text = ad.format_dt(user.expiry, tz_name)
     html = (
         f"<p>Olá, {user.name}.</p>"
         "<p>Seu acesso de Rede/VPN ou Internet está próximo do vencimento.</p>"
@@ -357,8 +358,12 @@ def send_email(smtp_config: SmtpConfig, message: EmailMessage) -> None:
         server.send_message(message)
 
 
-def main() -> int:
-    auto.load_env_file()
+def user_expiry_key(user: ExpiringUser) -> str:
+    return user.expiry.astimezone(timezone.utc).isoformat()
+
+
+def main(argv: list[str] | None = None) -> int:
+    ad.load_env_file()
 
     parser = argparse.ArgumentParser(
         description=(
@@ -405,8 +410,18 @@ def main() -> int:
         action="store_true",
         help="Testa apenas autenticação Microsoft Graph.",
     )
+    parser.add_argument(
+        "--db-path",
+        default="relatorio.db",
+        help="SQLite usado para controlar avisos já enviados. Padrão: relatorio.db.",
+    )
+    parser.add_argument(
+        "--ignore-sent",
+        action="store_true",
+        help="Ignora o controle de avisos já enviados no SQLite.",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         if args.smtp_test:
@@ -416,8 +431,11 @@ def main() -> int:
             test_graph(load_graph_config())
             return 0
 
-        ad_config = auto.load_config()
-        conn = auto.connect_ad(ad_config)
+        storage_conn = report_storage.connect(args.db_path)
+        report_storage.initialize(storage_conn)
+
+        ad_config = ad.load_config()
+        conn = ad.connect_ad(ad_config)
         from_date = None
         if args.from_date:
             tz = ZoneInfo(args.tz)
@@ -437,7 +455,7 @@ def main() -> int:
         if not users:
             return 0
 
-        email_provider = auto.os.getenv("EMAIL_PROVIDER", "smtp").lower()
+        email_provider = ad.os.getenv("EMAIL_PROVIDER", "smtp").lower()
         smtp_config = None
         graph_config = None
         if args.apply:
@@ -451,7 +469,7 @@ def main() -> int:
             print(f"Nome: {user.name}")
             print(f"DN: {user.dn}")
             print(f"E-mail: {user.email or 'Sem e-mail no AD'}")
-            print(f"Expiração atual: {auto.format_dt(user.expiry, args.tz)}")
+            print(f"Expiração atual: {ad.format_dt(user.expiry, args.tz)}")
             print(f"Formulário GLPI: {FORM_URL}")
 
             if user.expiry <= datetime.now(timezone.utc) and not args.force_expired:
@@ -460,6 +478,16 @@ def main() -> int:
 
             if not user.email:
                 print("SKIP: usuário sem atributo mail no AD.")
+                continue
+
+            # Evita reenvio para o mesmo login enquanto a mesma expiração estiver vigente.
+            expiry_key = user_expiry_key(user)
+            if not args.ignore_sent and report_storage.was_email_sent(
+                storage_conn,
+                login=user.login,
+                expiry_utc=expiry_key,
+            ):
+                print("SKIP: aviso já enviado para esta expiração.")
                 continue
 
             if not args.apply:
@@ -471,10 +499,16 @@ def main() -> int:
             else:
                 message = build_message(smtp_config, user, tz_name=args.tz)
                 send_email(smtp_config, message)
+            report_storage.mark_email_sent(
+                storage_conn,
+                login=user.login,
+                expiry_utc=expiry_key,
+                email=user.email,
+            )
             print("E-mail enviado com sucesso.")
 
         return 0
-    except auto.LDAPException as e:
+    except ad.LDAPException as e:
         print(f"Erro LDAP/AD: {e}", file=sys.stderr)
         return 2
     except Exception as e:
