@@ -8,7 +8,7 @@ O projeto possui dois scripts principais:
 - `reset_vpn.py`: consulta chamados no GLPI de acesso expirado, valida o usuario no Active Directory e renova o campo `accountExpires` quando aplicavel.
 - `skyone.py`: consulta chamados Skyone no GLPI, valida o requerente, envia o tutorial em PDF e deixa o chamado pendente.
 - `relatorio.py`: mostra em uma tela unica os usuarios que expiram em ate N dias e os chamados GLPI ativos.
-- `main.py`: CLI principal com subcomandos `email`, `reset` e `relatorio`.
+- `main.py`: CLI principal com subcomandos `email`, `reset`, `skyone` e `relatorio`; sem subcomando, roda e-mail, reset/VPN e Skyone no mesmo ciclo.
 
 > Atencao: a execucao padrao dos scripts e em `dry-run`. Alteracoes reais ou envio real de e-mail so acontecem com `--apply`.
 
@@ -109,7 +109,14 @@ Executar os fluxos pelo ponto de entrada unico:
 ```bash
 .venv/bin/python main.py email
 .venv/bin/python main.py reset --debug
+.venv/bin/python main.py skyone --glpi-only
 .venv/bin/python main.py relatorio --once
+```
+
+Rodar o ciclo completo em modo real:
+
+```bash
+.venv/bin/python main.py --apply
 ```
 
 ## Relatorio

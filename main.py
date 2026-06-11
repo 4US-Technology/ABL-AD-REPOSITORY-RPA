@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import emailvencimentosenha
 import relatorio
 import reset_vpn
+import skyone
 
 
 def should_run_daily_email(
@@ -28,7 +29,7 @@ def run_general(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="Fluxo geral do AD-RPA: lista vencimentos e chamados; com --apply executa as acoes."
     )
-    parser.add_argument("--apply", action="store_true", help="Executa envio de e-mail e reset real.")
+    parser.add_argument("--apply", action="store_true", help="Executa envio de e-mail, reset VPN e Skyone real.")
     parser.add_argument("--debug", action="store_true", help="Mostra debug do fluxo de reset.")
     parser.add_argument("--days", type=int, default=3, help="Janela de dias para aviso de expiracao.")
     parser.add_argument("--from-date", help="Data inicial YYYY-MM-DD para o fluxo de e-mail.")
@@ -69,6 +70,22 @@ def run_general(argv: list[str]) -> int:
         reset_args.extend(["--ticket-id", str(args.ticket_id)])
     if args.repeat_seen:
         reset_args.append("--repeat-seen")
+
+    skyone_args = [
+        "--limit",
+        str(args.limit),
+        "--statuses",
+        args.statuses,
+    ]
+    if args.apply:
+        skyone_args.append("--apply")
+    if args.debug:
+        skyone_args.append("--debug")
+    if args.ticket_id is not None:
+        skyone_args.extend(["--ticket-id", str(args.ticket_id)])
+    if args.repeat_seen:
+        skyone_args.append("--repeat-seen")
+
     seen = False
     last_email_run_date: str | None = None
     scheduled_time = dt_time(hour=7, minute=0)
@@ -99,6 +116,11 @@ def run_general(argv: list[str]) -> int:
         if reset_code != 0:
             return reset_code
 
+        print("\n=== SKYONE ===")
+        skyone_code = skyone.main(skyone_args)
+        if skyone_code != 0:
+            return skyone_code
+
         if args.once:
             return 0
 
@@ -108,7 +130,7 @@ def run_general(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = sys.argv[1:] if argv is None else argv
-    commands = {"reset", "email", "relatorio"}
+    commands = {"reset", "email", "relatorio", "skyone"}
 
     if not raw_args or raw_args[0] not in commands:
         return run_general(raw_args)
@@ -119,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("reset", help="Executa o fluxo de reset via GLPI/AD.")
     subparsers.add_parser("email", help="Executa o fluxo de aviso por e-mail.")
     subparsers.add_parser("relatorio", help="Mostra painel de usuarios a vencer e chamados ativos.")
+    subparsers.add_parser("skyone", help="Executa o fluxo de chamados Skyone no GLPI.")
 
     args, remaining = parser.parse_known_args(raw_args)
 
@@ -128,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         return emailvencimentosenha.main(remaining)
     if args.command == "relatorio":
         return relatorio.main(remaining)
+    if args.command == "skyone":
+        return skyone.main(remaining)
     parser.error(f"Comando desconhecido: {args.command}")
     return 2
 
