@@ -333,11 +333,11 @@ def process_ticket(
             return
 
         glpi.add_followup(ticket.id, note)
-        try_update_ticket_status(glpi, ticket.id, 4)
+        try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
         if db_conn and apply:
             report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action="requester_mismatch", login=ticket.login, note=note)
         print("Nota adicionada no GLPI explicando o motivo da não renovação.")
-        print("Chamado movido para Pendente (aguarda ação manual).")
+        print("Chamado solucionado no GLPI.")
         print("Nada a aplicar no AD.")
         return
 
@@ -356,11 +356,11 @@ def process_ticket(
             return
 
         glpi.add_followup(ticket.id, note)
-        try_update_ticket_status(glpi, ticket.id, 4)
+        try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
         if db_conn and apply:
             report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action="skyone", login=ticket.login, note=note)
         print("Nota adicionada no GLPI explicando o motivo da não renovação.")
-        print("Chamado movido para Pendente (aguarda ação manual).")
+        print("Chamado solucionado no GLPI.")
         print("Nada a aplicar no AD.")
         return
 

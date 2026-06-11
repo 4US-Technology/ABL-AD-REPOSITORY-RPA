@@ -25,7 +25,7 @@ from reset_vpn import (
 
 SKYONE_FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44"
 SKYONE_FORM_ID = 44
-PENDING_STATUS = 4
+SOLVED_STATUS = 5
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
 DEFAULT_ATTACHMENT_PATH = Path(__file__).resolve().parent / "files" / "Reset de senha da Skyone.pdf"
@@ -184,7 +184,7 @@ def process_ticket(
             return
 
         glpi.add_followup(ticket.id, note)
-        glpi.update_ticket(ticket.id, {"status": PENDING_STATUS})
+        glpi.update_ticket(ticket.id, {"status": SOLVED_STATUS})
         if db_conn and apply:
             report_storage.mark_ticket_processed(
                 db_conn,
@@ -194,18 +194,18 @@ def process_ticket(
                 note=note,
             )
         print("Nota adicionada no GLPI explicando o motivo.")
-        print("Chamado movido para Pendente.")
+        print("Chamado solucionado no GLPI.")
         return
 
     if not apply:
         print("DRY-RUN: a resposta Skyone seria adicionada.")
         print(f"DRY-RUN: o anexo seria enviado: {attachment_path}")
-        print("DRY-RUN: o chamado seria movido para Pendente.")
+        print("DRY-RUN: o chamado seria solucionado no GLPI.")
         return
 
     glpi.add_document_to_ticket(ticket.id, attachment_path, name="Tutorial_Reset_Senha_Skyone.pdf")
     glpi.add_followup(ticket.id, SKYONE_SOLUTION)
-    glpi.update_ticket(ticket.id, {"status": PENDING_STATUS})
+    glpi.update_ticket(ticket.id, {"status": SOLVED_STATUS})
     if db_conn and apply:
         report_storage.mark_ticket_processed(
             db_conn,
@@ -215,7 +215,7 @@ def process_ticket(
             note=SKYONE_SOLUTION,
         )
     print("Anexo enviado e resposta adicionada no GLPI.")
-    print("Chamado movido para Pendente.")
+    print("Chamado solucionado no GLPI.")
 
 
 def run_cycle(
@@ -256,9 +256,9 @@ def run_cycle(
             if apply:
                 try:
                     glpi.add_followup(ticket.id, build_processing_error_note(ticket, e))
-                    glpi.update_ticket(ticket.id, {"status": PENDING_STATUS})
+                    glpi.update_ticket(ticket.id, {"status": SOLVED_STATUS})
                     print("Nota adicionada no GLPI informando falha no processamento.")
-                    print("Chamado movido para Pendente.")
+                    print("Chamado solucionado no GLPI.")
                 except Exception as followup_error:
                     print(
                         f"Erro ao adicionar nota no chamado {ticket.id}: {followup_error}",
@@ -297,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     ad.load_env_file()
 
     parser = argparse.ArgumentParser(
-        description="Busca chamados Skyone no GLPI, envia tutorial de reset e deixa em Pendente."
+        description="Busca chamados Skyone no GLPI, envia tutorial de reset e soluciona o chamado."
     )
     parser.add_argument(
         "--limit",

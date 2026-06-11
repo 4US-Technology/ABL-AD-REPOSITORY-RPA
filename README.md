@@ -6,7 +6,7 @@ O projeto possui dois scripts principais:
 
 - `emailvencimentosenha.py`: consulta usuarios no Active Directory com acesso perto do vencimento e envia aviso por e-mail.
 - `reset_vpn.py`: consulta chamados no GLPI de acesso expirado, valida o usuario no Active Directory e renova o campo `accountExpires` quando aplicavel.
-- `skyone.py`: consulta chamados Skyone no GLPI, valida o requerente, envia o tutorial em PDF e deixa o chamado pendente.
+- `skyone.py`: consulta chamados Skyone no GLPI, valida o requerente, envia o tutorial em PDF e soluciona o chamado.
 - `relatorio.py`: mostra em uma tela unica os usuarios que expiram em ate N dias e os chamados GLPI ativos.
 - `main.py`: CLI principal com subcomandos `email`, `reset`, `skyone` e `relatorio`; sem subcomando, roda e-mail, reset/VPN e Skyone no mesmo ciclo.
 
@@ -632,7 +632,7 @@ https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44
 O script valida se o requerente do chamado no GLPI e o mesmo login informado em
 `Login da Skyone`. Quando a validacao passa, envia o PDF
 `files/Reset de senha da Skyone.pdf`, adiciona a resposta padrao e deixa o
-chamado em `Pendente`.
+chamado em `Solucionado`.
 
 ### Comandos principais
 
@@ -648,7 +648,7 @@ Processar um chamado especifico em dry-run:
 .venv/bin/python skyone.py --ticket-id 12345
 ```
 
-Aplicar resposta, anexo e status Pendente:
+Aplicar resposta, anexo e status Solucionado:
 
 ```bash
 .venv/bin/python skyone.py --ticket-id 12345 --apply
