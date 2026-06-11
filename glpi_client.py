@@ -252,3 +252,61 @@ class GlpiClient:
                 }
             },
         )
+
+    def search_formcreator_ticket_ids(
+        self,
+        *,
+        form_id: int,
+        limit: int,
+        statuses: tuple[str, ...] = (),
+    ) -> list[int]:
+        params = {
+            "forcedisplay[0]": 2,
+            "forcedisplay[1]": 1,
+            "forcedisplay[2]": 9,
+            "forcedisplay[3]": 8,
+            "range": f"0-{max(limit * 5, limit) - 1}",
+            "sort": 2,
+            "order": "DESC",
+            "criteria[0][field]": 9,
+            "criteria[0][searchtype]": "equals",
+            "criteria[0][value]": str(form_id),
+        }
+
+        data = self.request("GET", "search/PluginFormcreatorFormAnswer", params=params)
+        rows = data.get("data", []) if isinstance(data, dict) else []
+
+        ticket_ids: list[int] = []
+        seen_ticket_ids: set[int] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                formanswer_id = int(row.get("2"))
+            except (TypeError, ValueError):
+                continue
+
+            linked_items = self.request(
+                "GET",
+                f"PluginFormcreatorFormAnswer/{formanswer_id}/Item_Ticket",
+            )
+            if isinstance(linked_items, dict):
+                linked_items = linked_items.get("data", [])
+            if not isinstance(linked_items, list):
+                continue
+
+            for item in linked_items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    ticket_id = int(item.get("tickets_id"))
+                except (TypeError, ValueError):
+                    continue
+                if ticket_id in seen_ticket_ids:
+                    continue
+                seen_ticket_ids.add(ticket_id)
+                ticket_ids.append(ticket_id)
+                if len(ticket_ids) >= limit:
+                    return ticket_ids
+
+        return ticket_ids

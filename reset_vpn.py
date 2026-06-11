@@ -21,13 +21,19 @@ TARGET_TICKET_NAMES = (
     "Acesso Expirado",
     "Acesso Expirado Rede/VPN ou Internet",
     "Renovação de acesso de rede",
+    "Renovação de acesso rede e Internet",
 )
 REQUEST_TYPE_LABEL = "Tipo de solicitação"
 LOGIN_LABEL = "Login da Rede/VPN ou Internet"
+VPN_LOGIN_LABELS = (
+    LOGIN_LABEL,
+    "Login da VPN / Internet",
+)
 SKYONE_LOGIN_LABEL = "Login da Skyone"
 FORM_URLS = (
     "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46",
 )
+RESET_FORM_ID = 46
 SOLVED_STATUS = 5
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
@@ -213,7 +219,7 @@ def extract_login_from_ticket_content(content: str) -> str | None:
     if request_type and "skyone" in request_type.lower():
         return None
 
-    preferred_labels = [LOGIN_LABEL, SKYONE_LOGIN_LABEL]
+    preferred_labels = [*VPN_LOGIN_LABELS, SKYONE_LOGIN_LABEL]
 
     for label in preferred_labels:
         value = extract_field_value(lines, label)
@@ -221,7 +227,7 @@ def extract_login_from_ticket_content(content: str) -> str | None:
             return value
 
     match = re.search(
-        r"(?:Login da Rede/VPN ou Internet|Login da Skyone)\s+([A-Za-z0-9._-]+)",
+        r"(?:Login da Rede/VPN ou Internet|Login da VPN / Internet|Login da Skyone)\s+([A-Za-z0-9._-]+)",
         text,
         flags=re.IGNORECASE,
     )
@@ -249,43 +255,11 @@ def search_vpn_reset_ticket_ids(
     limit: int,
     statuses: tuple[str, ...] = DEFAULT_TICKET_STATUSES,
 ) -> list[int]:
-    params = {
-        "forcedisplay[0]": 2,
-        "forcedisplay[1]": 1,
-        "forcedisplay[2]": 12,
-        "range": f"0-{limit - 1}",
-        "sort": 2,
-        "order": "DESC",
-    }
-
-    criteria_index = 0
-    for index, ticket_name in enumerate(TARGET_TICKET_NAMES):
-        params[f"criteria[{criteria_index}][field]"] = 1
-        params[f"criteria[{criteria_index}][searchtype]"] = "contains"
-        params[f"criteria[{criteria_index}][value]"] = ticket_name
-        if index > 0:
-            params[f"criteria[{criteria_index}][link]"] = "OR"
-        criteria_index += 1
-
-    if statuses:
-        params[f"criteria[{criteria_index}][link]"] = "AND"
-        params[f"criteria[{criteria_index}][field]"] = 12
-        if len(statuses) == 1:
-            params[f"criteria[{criteria_index}][searchtype]"] = "equals"
-            params[f"criteria[{criteria_index}][value]"] = statuses[0]
-        else:
-            params[f"criteria[{criteria_index}][searchtype]"] = "contains"
-            params[f"criteria[{criteria_index}][value]"] = "^" + "$|^".join(statuses) + "$"
-    data = client.request("GET", "search/Ticket", params=params)
-    rows = data.get("data", []) if isinstance(data, dict) else []
-
-    ids: list[int] = []
-    for row in rows:
-        if isinstance(row, dict):
-            ticket_id = ticket_id_from_search_row(row)
-            if ticket_id is not None:
-                ids.append(ticket_id)
-    return ids
+    return client.search_formcreator_ticket_ids(
+        form_id=RESET_FORM_ID,
+        limit=limit,
+        statuses=statuses,
+    )
 
 
 def load_vpn_reset_tickets(

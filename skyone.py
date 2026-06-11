@@ -20,12 +20,11 @@ from reset_vpn import (
     load_ticket_requester_logins,
     normalized_ticket_lines,
     requester_matches_login,
-    ticket_id_from_search_row,
 )
 
 
 SKYONE_FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44"
-SKYONE_TICKET_NAME = "Skyone"
+SKYONE_FORM_ID = 44
 PENDING_STATUS = 4
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
@@ -73,38 +72,11 @@ def search_skyone_ticket_ids(
     limit: int,
     statuses: tuple[str, ...] = DEFAULT_TICKET_STATUSES,
 ) -> list[int]:
-    params = {
-        "forcedisplay[0]": 2,
-        "forcedisplay[1]": 1,
-        "forcedisplay[2]": 12,
-        "range": f"0-{limit - 1}",
-        "sort": 2,
-        "order": "DESC",
-        "criteria[0][field]": 1,
-        "criteria[0][searchtype]": "contains",
-        "criteria[0][value]": SKYONE_TICKET_NAME,
-    }
-
-    if statuses:
-        params["criteria[1][link]"] = "AND"
-        params["criteria[1][field]"] = 12
-        if len(statuses) == 1:
-            params["criteria[1][searchtype]"] = "equals"
-            params["criteria[1][value]"] = statuses[0]
-        else:
-            params["criteria[1][searchtype]"] = "contains"
-            params["criteria[1][value]"] = "^" + "$|^".join(statuses) + "$"
-
-    data = client.request("GET", "search/Ticket", params=params)
-    rows = data.get("data", []) if isinstance(data, dict) else []
-
-    ids: list[int] = []
-    for row in rows:
-        if isinstance(row, dict):
-            ticket_id = ticket_id_from_search_row(row)
-            if ticket_id is not None:
-                ids.append(ticket_id)
-    return ids
+    return client.search_formcreator_ticket_ids(
+        form_id=SKYONE_FORM_ID,
+        limit=limit,
+        statuses=statuses,
+    )
 
 
 def build_skyone_ticket(
