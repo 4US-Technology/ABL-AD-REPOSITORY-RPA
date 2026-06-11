@@ -1,20 +1,11 @@
 services:
-  email-vencimento:
+  main:
     build:
       context: .
-      dockerfile: Dockerfile.email
-    image: ad-rpa-email-vencimento:local
-    container_name: ad-rpa-email-vencimento
+      dockerfile: Dockerfile
+    image: ad-rpa:local
+    container_name: ad-rpa-main
     env_file:
       - .env
-    restart: "no"
-
-  reset-vpn:
-    build:
-      context: .
-      dockerfile: Dockerfile.reset-vpn
-    image: ad-rpa-reset-vpn:local
-    container_name: ad-rpa-reset-vpn
-    env_file:
-      - .env
-    restart: "no"
+    command: ["--apply"]
+    restart: unless-stopped

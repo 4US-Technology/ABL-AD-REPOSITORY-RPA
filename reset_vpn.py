@@ -26,7 +26,6 @@ REQUEST_TYPE_LABEL = "Tipo de solicitação"
 LOGIN_LABEL = "Login da Rede/VPN ou Internet"
 SKYONE_LOGIN_LABEL = "Login da Skyone"
 FORM_URLS = (
-    "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=15",
     "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46",
 )
 SOLVED_STATUS = 5
