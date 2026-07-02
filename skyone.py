@@ -14,17 +14,16 @@ import report_storage
 from glpi_client import GlpiClient, load_config as load_glpi_config
 from reset_vpn import (
     SKYONE_LOGIN_LABEL,
-    VpnResetTicket,
-    build_requester_mismatch_note,
     extract_field_value,
     load_ticket_requester_logins,
+    normalize_login,
     normalized_ticket_lines,
-    requester_matches_login,
 )
 
 
 SKYONE_FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44"
 SKYONE_FORM_ID = 44
+SKYONE_LOGIN_PREFIX = "abl."
 SOLVED_STATUS = 5
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
@@ -136,24 +135,45 @@ def load_tickets_for_args(
     return load_skyone_tickets(glpi, limit=limit, statuses=statuses)
 
 
-def to_vpn_ticket(ticket: SkyoneTicket) -> VpnResetTicket:
-    return VpnResetTicket(
-        id=ticket.id,
-        name=ticket.name,
-        status=ticket.status,
-        request_type="Skyone",
-        login=ticket.login,
-        content=ticket.content,
-        requester_logins=ticket.requester_logins,
-    )
-
-
 def build_processing_error_note(ticket: SkyoneTicket, error: Exception) -> str:
     return (
         "Não foi possível processar automaticamente este chamado Skyone.\n\n"
         f"Motivo: {error}\n\n"
         f"Login informado no chamado: {ticket.login}\n"
         "Verifique se o login foi preenchido corretamente e se o usuário existe no GLPI."
+    )
+
+
+def normalize_skyone_login(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def expected_skyone_logins(ticket: SkyoneTicket) -> set[str]:
+    expected: set[str] = set()
+    for requester_login in ticket.requester_logins:
+        normalized = normalize_login(requester_login)
+        if not normalized:
+            continue
+        expected.add(f"{SKYONE_LOGIN_PREFIX}{normalized}")
+        if normalized.startswith(SKYONE_LOGIN_PREFIX):
+            expected.add(normalized)
+    return expected
+
+
+def requester_matches_skyone_login(ticket: SkyoneTicket) -> bool:
+    return normalize_skyone_login(ticket.login) in expected_skyone_logins(ticket)
+
+
+def build_skyone_login_mismatch_note(ticket: SkyoneTicket) -> str:
+    requesters = ", ".join(ticket.requester_logins) or "não identificado"
+    expected = ", ".join(sorted(expected_skyone_logins(ticket))) or "não identificado"
+    return (
+        "Não foi possível processar automaticamente este chamado Skyone porque "
+        "o login informado não corresponde ao usuário que abriu o chamado.\n\n"
+        f"Login da Skyone informado: {ticket.login}\n"
+        f"Requerente(s) do chamado no GLPI: {requesters}\n"
+        f"Login Skyone esperado: {expected}\n\n"
+        "Abra um novo chamado usando o próprio usuário dono do acesso Skyone."
     )
 
 
@@ -174,13 +194,16 @@ def process_ticket(
         f"{', '.join(ticket.requester_logins) if ticket.requester_logins else 'não identificado'}"
     )
 
-    vpn_ticket = to_vpn_ticket(ticket)
-    if not requester_matches_login(vpn_ticket):
-        note = build_requester_mismatch_note(vpn_ticket)
+    expected = ", ".join(sorted(expected_skyone_logins(ticket))) or "não identificado"
+    print(f"Login Skyone esperado: {expected}")
+
+    if not requester_matches_skyone_login(ticket):
+        note = build_skyone_login_mismatch_note(ticket)
         print("Deve responder?: NÃO")
-        print("Motivo: chamado aberto por usuário diferente do login informado.")
+        print("Motivo: Login da Skyone não corresponde ao requerente do chamado.")
         if not apply:
             print("DRY-RUN: uma nota seria adicionada no GLPI explicando o motivo.")
+            print("DRY-RUN: o chamado seria solucionado no GLPI.")
             return
 
         glpi.add_followup(ticket.id, note)
@@ -189,7 +212,7 @@ def process_ticket(
             report_storage.mark_ticket_processed(
                 db_conn,
                 ticket_id=ticket.id,
-                action="skyone_requester_mismatch",
+                action="skyone_login_mismatch",
                 login=ticket.login,
                 note=note,
             )

@@ -157,10 +157,8 @@ def build_non_renewal_reason(decision: ad.Decision) -> str:
 def build_non_renewal_options(decision: ad.Decision) -> str:
     if not decision.is_expired and decision.current_expiry is not None:
         return (
-            "\n\nOpções:\n"
-            "- Abrir chamado de configuração/manutenção de máquina.\n"
-            "- Validar conexão, VPN, internet e perfil local do computador.\n"
-            "- Abrir novo chamado de renovação somente quando o acesso estiver expirado."
+            "\n\nAção realizada:\n"
+            "- Chamado encerrado, pois o acesso ainda não está expirado."
         )
 
     return ""

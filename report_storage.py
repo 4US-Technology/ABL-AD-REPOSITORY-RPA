@@ -78,7 +78,33 @@ def initialize(conn: sqlite3.Connection) -> None:
             note TEXT,
             PRIMARY KEY (ticket_id)
         );
+
+        CREATE TABLE IF NOT EXISTS app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         """
+    )
+    conn.commit()
+
+
+def get_state(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        "SELECT value FROM app_state WHERE key = ? LIMIT 1",
+        (key,),
+    ).fetchone()
+    return str(row["value"]) if row else None
+
+
+def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    updated_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO app_state (key, value, updated_at)
+        VALUES (?, ?, ?)
+        """,
+        (key, value, updated_at),
     )
     conn.commit()
 

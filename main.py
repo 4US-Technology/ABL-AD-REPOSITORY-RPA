@@ -4,11 +4,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import emailvencimentosenha
 import relatorio
+import report_storage
 import reset_vpn
 import skyone
 
@@ -17,11 +18,8 @@ def should_run_daily_email(
     *,
     now: datetime,
     last_run_date: str | None,
-    scheduled_time: dt_time,
 ) -> bool:
     today = now.date().isoformat()
-    if now.time() < scheduled_time:
-        return False
     return last_run_date != today
 
 
@@ -33,7 +31,7 @@ def run_general(argv: list[str]) -> int:
     parser.add_argument("--debug", action="store_true", help="Mostra debug do fluxo de reset.")
     parser.add_argument("--days", type=int, default=3, help="Janela de dias para aviso de expiracao.")
     parser.add_argument("--from-date", help="Data inicial YYYY-MM-DD para o fluxo de e-mail.")
-    parser.add_argument("--tz", default="America/Sao_Paulo", help="Timezone de exibicao.")
+    parser.add_argument("--tz", default="America/Sao_Paulo", help="Timezone usado para identificar a virada do dia. Padrão: America/Sao_Paulo.")
     parser.add_argument("--login", help="Limita o fluxo de e-mail a um login.")
     parser.add_argument("--force-expired", action="store_true", help="Permite incluir contas ja vencidas no aviso.")
     parser.add_argument("--limit", type=int, default=20, help="Maximo de chamados GLPI.")
@@ -42,6 +40,7 @@ def run_general(argv: list[str]) -> int:
     parser.add_argument("--once", action="store_true", help="Executa um unico ciclo e sai.")
     parser.add_argument("--interval", type=int, default=60, help="Intervalo do polling do reset.")
     parser.add_argument("--repeat-seen", action="store_true", help="Reprocessa chamados ja vistos no mesmo polling.")
+    parser.add_argument("--db-path", default="relatorio.db", help="Arquivo SQLite para histórico de execução. Padrão: relatorio.db.")
     args = parser.parse_args(argv)
 
     email_args = ["--days", str(args.days), "--tz", args.tz]
@@ -86,46 +85,58 @@ def run_general(argv: list[str]) -> int:
     if args.repeat_seen:
         skyone_args.append("--repeat-seen")
 
+    db_conn = report_storage.connect(args.db_path)
+    report_storage.initialize(db_conn)
+
     seen = False
-    last_email_run_date: str | None = None
-    scheduled_time = dt_time(hour=7, minute=0)
+    last_email_run_date = report_storage.get_state(db_conn, "main.last_email_run_date")
     tz = ZoneInfo(args.tz)
 
-    while True:
-        if seen:
-            print()
+    try:
+        while True:
+            if seen:
+                print()
 
-        run_email_now = args.once
-        now = datetime.now(tz)
-        if not args.once:
+            now = datetime.now(tz)
+            today = now.date().isoformat()
             run_email_now = should_run_daily_email(
                 now=now,
                 last_run_date=last_email_run_date,
-                scheduled_time=scheduled_time,
             )
 
-        if run_email_now:
-            print("=== EMAIL ===")
-            email_code = emailvencimentosenha.main(email_args)
-            if email_code != 0:
-                return email_code
-            last_email_run_date = now.date().isoformat()
+            print(f"=== EMAIL ({args.tz}) ===")
+            if run_email_now:
+                print(f"Virada de dia identificada: {today}. Executando envio diário.")
+                email_code = emailvencimentosenha.main(email_args)
+                if email_code != 0:
+                    return email_code
+                last_email_run_date = today
+                if args.apply:
+                    report_storage.set_state(db_conn, "main.last_email_run_date", today)
+            else:
+                print(
+                    "Envio diário não executado: "
+                    f"data {today} já processada em {args.tz}. "
+                    f"Última data enviada: {last_email_run_date or 'nenhuma'}."
+                )
 
-        print("\n=== RESET ===")
-        reset_code = reset_vpn.main(reset_args)
-        if reset_code != 0:
-            return reset_code
+            print("\n=== RESET ===")
+            reset_code = reset_vpn.main(reset_args)
+            if reset_code != 0:
+                return reset_code
 
-        print("\n=== SKYONE ===")
-        skyone_code = skyone.main(skyone_args)
-        if skyone_code != 0:
-            return skyone_code
+            print("\n=== SKYONE ===")
+            skyone_code = skyone.main(skyone_args)
+            if skyone_code != 0:
+                return skyone_code
 
-        if args.once:
-            return 0
+            if args.once:
+                return 0
 
-        seen = True
-        time.sleep(args.interval)
+            seen = True
+            time.sleep(args.interval)
+    finally:
+        db_conn.close()
 
 
 def main(argv: list[str] | None = None) -> int:

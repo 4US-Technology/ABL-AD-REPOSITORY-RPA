@@ -119,6 +119,18 @@ Rodar o ciclo completo em modo real:
 .venv/bin/python main.py --apply
 ```
 
+No modo continuo, o envio de e-mail roda somente quando o `main.py` identifica
+uma nova data no timezone configurado em `--tz`. Por padrao, a virada do dia e
+calculada em:
+
+```text
+America/Sao_Paulo
+```
+
+A ultima data processada fica gravada no SQLite (`relatorio.db` por padrao),
+entao reiniciar o container no mesmo dia nao dispara novo envio.
+Reset/VPN e Skyone continuam rodando a cada ciclo do polling.
+
 ## Relatorio
 
 O `relatorio.py` monta uma tela que e atualizada no mesmo lugar do terminal, sem empilhar linhas.
@@ -629,10 +641,11 @@ Responder chamados Skyone do formulario:
 https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44
 ```
 
-O script valida se o requerente do chamado no GLPI e o mesmo login informado em
-`Login da Skyone`. Quando a validacao passa, envia o PDF
-`files/Reset de senha da Skyone.pdf`, adiciona a resposta padrao e deixa o
-chamado em `Solucionado`.
+O script valida se o chamado veio do formulario Skyone, se existe o campo
+`Login da Skyone` e se esse login corresponde ao requerente do GLPI com o
+prefixo `ABL.`. Exemplo: requerente `usuario` deve informar `ABL.usuario`.
+Quando a validacao passa, envia o PDF `files/Reset de senha da Skyone.pdf`,
+adiciona a resposta padrao e deixa o chamado em `Solucionado`.
 
 ### Comandos principais
 
