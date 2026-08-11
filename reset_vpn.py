@@ -34,7 +34,7 @@ FORM_URLS = (
     "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46",
 )
 RESET_FORM_ID = 46
-SOLVED_STATUS = 5
+SOLVED_STATUS = 6
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
 
@@ -148,7 +148,7 @@ def build_non_renewal_reason(decision: ad.Decision) -> str:
     if not decision.is_expired and decision.current_expiry is not None:
         return (
             "Não foi possível renovar automaticamente porque o acesso "
-            "não estava expirado no AD."
+            f"não está expirado e o vencimento é superior a {ad.RENEWAL_WINDOW_DAYS} dias."
         )
 
     return f"Não foi possível renovar automaticamente. Motivo: {decision.reason}"
@@ -160,7 +160,7 @@ def build_non_renewal_options(decision: ad.Decision) -> str:
             "\n\nOpções:\n"
             "- Abrir chamado de configuração/manutenção de máquina.\n"
             "- Validar conexão, VPN, internet e perfil local do computador.\n"
-            "- Abrir novo chamado de renovação somente quando o acesso estiver expirado."
+            f"- Abrir novo chamado de renovação quando o acesso estiver expirado ou faltarem até {ad.RENEWAL_WINDOW_DAYS} dias para o vencimento."
         )
 
     return ""
@@ -364,8 +364,11 @@ def process_ticket(
         print("Nada a aplicar no AD.")
         return
 
-    user = ad.find_user(ad_conn, ad_config, ticket.login)
-    decision = ad.build_decision(user, ad_config, ticket.login, tz_name)
+    ad_login = normalize_login(ticket.login)
+    original_email = ticket.login if "@" in ticket.login else None
+    user = ad.find_user(ad_conn, ad_config, ad_login, email=original_email)
+    real_login = str(getattr(user, "sAMAccountName").value or ad_login)
+    decision = ad.build_decision(user, ad_config, real_login, tz_name)
 
     print(f"DN: {decision.dn}")
     print(f"Expiração atual: {ad.format_dt(decision.current_expiry, tz_name)}")
@@ -495,13 +498,24 @@ def run_cycle(
             print(f"Erro ao processar chamado {ticket.id}: {e}", file=sys.stderr)
             if apply:
                 try:
-                    glpi.add_followup(ticket.id, build_processing_error_note(ticket, e))
+                    note = build_processing_error_note(ticket, e)
+                    glpi.add_followup(ticket.id, note)
+                    try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
                     print("Nota adicionada no GLPI informando falha no processamento.")
                 except Exception as followup_error:
                     print(
                         f"Erro ao adicionar nota no chamado {ticket.id}: {followup_error}",
                         file=sys.stderr,
                     )
+                finally:
+                    if db_conn:
+                        report_storage.mark_ticket_processed(
+                            db_conn,
+                            ticket_id=ticket.id,
+                            action="error",
+                            login=ticket.login,
+                            note=str(e),
+                        )
             else:
                 print("DRY-RUN: uma nota seria adicionada no GLPI informando falha no processamento.")
 

@@ -112,7 +112,11 @@ def filetime_to_datetime(value: Any) -> datetime | None:
     if value in (None, "", 0, "0", 9223372036854775807, "9223372036854775807"):
         return None
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        # ldap3 converte FILETIME 0 para datetime da época (1601-01-01), que significa nunca expira
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if dt <= FILETIME_EPOCH:
+            return None
+        return dt
     filetime = int(value)
     return FILETIME_EPOCH + timedelta(microseconds=filetime / 10)
 
@@ -150,29 +154,37 @@ def add_months(value: datetime, months: int) -> datetime:
     return value.replace(year=year, month=month, day=day)
 
 
-def find_user(conn: Connection, config: AdConfig, login: str):
+def find_user(conn: Connection, config: AdConfig, login: str, *, email: str | None = None):
     safe_login = escape_filter_chars(login)
     safe_attr = escape_filter_chars(config.search_attr)
+    attrs = ["cn", "displayName", "mail", "sAMAccountName", "userPrincipalName", config.expiry_attr]
+
     ok = conn.search(
         search_base=config.base_dn,
-        search_filter=(
-            f"(&(objectClass=user)(!(objectClass=computer))({safe_attr}={safe_login}))"
-        ),
+        search_filter=f"(&(objectClass=user)(!(objectClass=computer))({safe_attr}={safe_login}))",
         search_scope=SUBTREE,
-        attributes=[
-            "cn",
-            "displayName",
-            "mail",
-            "sAMAccountName",
-            "userPrincipalName",
-            config.expiry_attr,
-        ],
+        attributes=attrs,
     )
-    if not ok:
-        raise RuntimeError(f"Usuário não encontrado no AD: {login}")
-    if len(conn.entries) > 1:
-        raise RuntimeError(f"Mais de um usuário encontrado no AD para: {login}")
-    return conn.entries[0]
+    if ok and len(conn.entries) == 1:
+        return conn.entries[0]
+
+    # fallback: busca pelo atributo mail quando o login não bate com sAMAccountName
+    # (ex: usuários externos que preenchem o formulário com o e-mail)
+    if email and "@" in email:
+        safe_email = escape_filter_chars(email)
+        ok = conn.search(
+            search_base=config.base_dn,
+            search_filter=f"(&(objectClass=user)(!(objectClass=computer))(mail={safe_email}))",
+            search_scope=SUBTREE,
+            attributes=attrs,
+        )
+        if ok and len(conn.entries) == 1:
+            return conn.entries[0]
+
+    raise RuntimeError(f"Usuário não encontrado no AD: {login}")
+
+
+RENEWAL_WINDOW_DAYS = 3
 
 
 def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision:
@@ -191,7 +203,9 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
 
     now = datetime.now(timezone.utc)
     is_expired = current_expiry <= now
-    if not is_expired:
+    is_expiring_soon = not is_expired and current_expiry <= now + timedelta(days=RENEWAL_WINDOW_DAYS)
+
+    if not is_expired and not is_expiring_soon:
         return Decision(
             login,
             dn,
@@ -201,6 +215,12 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
             None,
             "Acesso ainda não está expirado.",
         )
+
+    reason = (
+        "Acesso expirado. Renovação permitida por regra."
+        if is_expired
+        else f"Acesso vence em até {RENEWAL_WINDOW_DAYS} dias. Renovação preventiva permitida."
+    )
 
     new_expiry = add_months(now.astimezone(ZoneInfo(tz_name)), 3).replace(
         hour=23,
@@ -212,10 +232,10 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
         login,
         dn,
         current_expiry,
-        True,
+        is_expired,
         True,
         new_expiry,
-        "Acesso expirado. Renovação permitida por regra.",
+        reason,
     )
 
 

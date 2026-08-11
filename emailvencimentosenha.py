@@ -19,7 +19,7 @@ import ad_directory as ad
 import report_storage
 
 
-FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=15"
+FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=46"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 
@@ -81,9 +81,16 @@ def find_expiring_users(
     *,
     days: int,
     from_date: datetime | None,
+    tz_name: str = "America/Sao_Paulo",
 ) -> list[ExpiringUser]:
     now_utc = datetime.now(timezone.utc)
-    start_utc = from_date.astimezone(timezone.utc) if from_date else now_utc
+    if from_date:
+        start_utc = from_date.astimezone(timezone.utc)
+    else:
+        # Usa meia-noite do fuso local para não excluir contas que venceram no início do dia.
+        tz = ZoneInfo(tz_name)
+        today_start_local = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_utc = today_start_local.astimezone(timezone.utc)
     deadline_utc = now_utc + timedelta(days=days)
 
     ok = conn.search(
@@ -449,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
                 ad_config,
                 days=args.days,
                 from_date=from_date,
+                tz_name=args.tz,
             )
 
         print(f"Usuários encontrados para aviso: {len(users)}")
@@ -472,7 +480,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Expiração atual: {ad.format_dt(user.expiry, args.tz)}")
             print(f"Formulário GLPI: {FORM_URL}")
 
-            if user.expiry <= datetime.now(timezone.utc) and not args.force_expired:
+            tz = ZoneInfo(args.tz)
+            expiry_date = user.expiry.astimezone(tz).date()
+            today_date = datetime.now(tz).date()
+            if expiry_date < today_date and not args.force_expired:
                 print("SKIP: conta já vencida; aviso preventivo não será enviado.")
                 continue
 

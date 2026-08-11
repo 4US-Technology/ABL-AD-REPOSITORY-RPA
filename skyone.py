@@ -25,7 +25,7 @@ from reset_vpn import (
 
 SKYONE_FORM_URL = "https://suporte.ablprime.com.br/plugins/formcreator/front/formdisplay.php?id=44"
 SKYONE_FORM_ID = 44
-SOLVED_STATUS = 5
+SOLVED_STATUS = 6
 DEFAULT_TICKET_STATUSES = ("2",)
 ACTIVE_TICKET_STATUSES = ("1", "2")
 DEFAULT_ATTACHMENT_PATH = Path(__file__).resolve().parent / "files" / "Reset de senha da Skyone.pdf"

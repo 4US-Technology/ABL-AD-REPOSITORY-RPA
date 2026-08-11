@@ -9,3 +9,5 @@ services:
       - .env
     command: ["--apply"]
     restart: unless-stopped
+    volumes:
+      - ./relatorio.db:/app/relatorio.db
