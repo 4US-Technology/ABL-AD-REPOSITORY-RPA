@@ -7,14 +7,14 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ldap3.core.exceptions import LDAPException
 
 import ad_directory as ad
 import report_storage
-from glpi_client import GlpiClient, load_config as load_glpi_config
+from glpi_client import GlpiClient, TransientGlpiError, load_config as load_glpi_config
 
 
 TARGET_TICKET_NAMES = (
@@ -36,7 +36,7 @@ FORM_URLS = (
 )
 RESET_FORM_ID = 46
 SOLVED_STATUS = 6
-DEFAULT_TICKET_STATUSES = ("2",)
+DEFAULT_TICKET_STATUSES = ("1", "2")
 ACTIVE_TICKET_STATUSES = ("1", "2")
 
 
@@ -245,7 +245,7 @@ def extract_login_from_ticket_content(content: str) -> str | None:
             return value
 
     match = re.search(
-        r"(?:Login da Rede/VPN ou Internet|Login da VPN / Internet|Login da Skyone)\s+([A-Za-z0-9._-]+)",
+        r"(?:Login da Rede/VPN ou Internet|Login da VPN / Internet|Usuário\(Login\) da VPN / Internet|Login da Skyone)\s+([A-Za-z0-9._-]+)",
         text,
         flags=re.IGNORECASE,
     )
@@ -321,6 +321,37 @@ def load_vpn_reset_tickets(
     return tickets
 
 
+def _expiry_value(value: datetime | None) -> str | None:
+    return value.astimezone(timezone.utc).isoformat() if value else None
+
+
+def _finish_ticket(ticket: VpnResetTicket, glpi: GlpiClient, db_conn, *, solution: bool, action: str) -> None:
+    """Executa somente o trecho GLPI ainda pendente; seguro após queda ambígua."""
+    state = report_storage.get_vpn_state(db_conn, ticket.id)
+    if state is None:
+        raise RuntimeError("Estado VPN ausente ao finalizar chamado.")
+    message = str(state["glpi_message"] or "")
+    if state["stage"] == "message_pending":
+        if not glpi.ticket_has_message(ticket.id, message, solution=solution):
+            (glpi.add_solution if solution else glpi.add_followup)(ticket.id, message)
+        report_storage.save_vpn_state(db_conn, ticket.id, "close_pending", ticket.login,
+                                      state["planned_expiry"], message)
+    state = report_storage.get_vpn_state(db_conn, ticket.id)
+    if state and state["stage"] == "close_pending":
+        glpi.update_ticket(ticket.id, {"status": SOLVED_STATUS})
+        current = glpi.get_item("Ticket", ticket.id)
+        if str(current.get("status")) != str(SOLVED_STATUS):
+            raise RuntimeError(f"GLPI não confirmou o fechamento do chamado {ticket.id}.")
+        report_storage.save_vpn_state(db_conn, ticket.id, "completed", ticket.login,
+                                      state["planned_expiry"], message)
+        report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action=action,
+                                             login=ticket.login, note=message)
+
+
+def _queue_message(ticket: VpnResetTicket, db_conn, message: str, *, planned: str | None = None) -> None:
+    report_storage.save_vpn_state(db_conn, ticket.id, "message_pending", ticket.login, planned, message)
+
+
 def process_ticket(
     ticket: VpnResetTicket,
     *,
@@ -341,6 +372,18 @@ def process_ticket(
         f"{', '.join(ticket.requester_logins) if ticket.requester_logins else 'não identificado'}"
     )
 
+    state = report_storage.get_vpn_state(db_conn, ticket.id) if db_conn and apply else None
+    if state and state["stage"] == "completed":
+        # Ticket reaberto é uma nova solicitação, não um duplicado da anterior.
+        if str(ticket.status) in ACTIVE_TICKET_STATUSES:
+            report_storage.clear_vpn_state(db_conn, ticket.id)
+            state = None
+        else:
+            return
+    if state and state["stage"] == "manual_review":
+        print("Pendente de revisão manual: expiração no AD divergiu da intenção registrada.")
+        return
+
     if not requester_matches_login(ticket):
         note = build_requester_mismatch_note(ticket)
         print("Deve renovar?: NÃO")
@@ -350,10 +393,8 @@ def process_ticket(
             print("DRY-RUN: uma nota seria adicionada no GLPI explicando o motivo.")
             return
 
-        glpi.add_followup(ticket.id, note)
-        try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
-        if db_conn and apply:
-            report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action="requester_mismatch", login=ticket.login, note=note)
+        _queue_message(ticket, db_conn, note)
+        _finish_ticket(ticket, glpi, db_conn, solution=False, action="requester_mismatch")
         print("Nota adicionada no GLPI explicando o motivo da não renovação.")
         print("Chamado solucionado no GLPI.")
         print("Nada a aplicar no AD.")
@@ -388,6 +429,23 @@ def process_ticket(
     real_login = str(getattr(user, "sAMAccountName").value or ad_login)
     decision = ad.build_decision(user, ad_config, real_login, tz_name)
 
+    # Uma intenção AD pendente pode ter sido aplicada antes da queda. Nunca aplique
+    # de novo: somente aceite exatamente a expiração registrada.
+    if state and state["stage"] in {"ad_pending", "message_pending", "close_pending"} and state["planned_expiry"]:
+        if _expiry_value(decision.current_expiry) != state["planned_expiry"]:
+            report_storage.save_vpn_state(db_conn, ticket.id, "manual_review", ticket.login,
+                                          state["planned_expiry"], state["glpi_message"])
+            print("Divergência de expiração detectada; encaminhado para revisão manual.")
+            return
+        if state["stage"] == "ad_pending":
+            report_storage.save_vpn_state(db_conn, ticket.id, "message_pending", ticket.login,
+                                          state["planned_expiry"], state["glpi_message"])
+            state = report_storage.get_vpn_state(db_conn, ticket.id)
+        if state["stage"] in {"message_pending", "close_pending"}:
+            _finish_ticket(ticket, glpi, db_conn, solution=True, action="renewed")
+            print("Retomada do GLPI concluída sem reaplicar a renovação no AD.")
+            return
+
     print(f"DN: {decision.dn}")
     print(f"Expiração atual: {ad.format_dt(decision.current_expiry, tz_name)}")
     print(f"Está expirado?: {'SIM' if decision.is_expired else 'NÃO'}")
@@ -416,17 +474,12 @@ def process_ticket(
             f"Login analisado: {decision.login}\n"
             f"Expiração atual: {ad.format_dt(decision.current_expiry, tz_name)}"
         )
-        glpi.add_followup(ticket.id, note)
-        try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
-        if db_conn and apply:
-            report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action="not_expired", login=ticket.login, note=note)
+        _queue_message(ticket, db_conn, note)
+        _finish_ticket(ticket, glpi, db_conn, solution=False, action="not_expired")
         print("Nota adicionada no GLPI explicando o motivo da não renovação.")
         print("Chamado encerrado no GLPI (acesso não expirado).")
         print("Nada a aplicar no AD.")
         return
-
-    ad.apply_renewal(ad_conn, ad_config, decision)
-    print("ALTERAÇÃO APLICADA NO AD COM SUCESSO.")
 
     solution = (
         "Acessos renovados por mais 3 meses.\n\n"
@@ -435,10 +488,14 @@ def process_ticket(
         "usuário(a) pedir a renovação do seu acesso. Não serão atendidos chamados "
         "de renovação de senha que não seja do próprio dono do login de acesso."
     )
-    glpi.add_solution(ticket.id, solution)
-    glpi.update_ticket(ticket.id, {"status": SOLVED_STATUS})
-    if db_conn and apply:
-        report_storage.mark_ticket_processed(db_conn, ticket_id=ticket.id, action="renewed", login=ticket.login, note=solution)
+    planned = _expiry_value(decision.new_expiry)
+    # A mensagem também é gravada antes do AD: se a conexão cair logo após o
+    # modify, a retomada tem todos os dados para concluir somente o GLPI.
+    report_storage.save_vpn_state(db_conn, ticket.id, "ad_pending", ticket.login, planned, solution)
+    ad.apply_renewal(ad_conn, ad_config, decision)
+    print("ALTERAÇÃO APLICADA NO AD COM SUCESSO.")
+    _queue_message(ticket, db_conn, solution, planned=planned)
+    _finish_ticket(ticket, glpi, db_conn, solution=True, action="renewed")
     print("Solução adicionada e chamado encerrado no GLPI.")
 
 
@@ -485,23 +542,14 @@ def run_cycle(
     statuses: tuple[str, ...],
     apply: bool,
     tz_name: str,
-    seen_ticket_ids: set[int],
-    repeat_seen: bool,
     db_conn=None,
 ) -> None:
     print(f"\n---- CICLO {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ----")
     tickets = load_tickets_for_args(glpi, ticket_id=ticket_id, limit=limit, statuses=statuses)
 
-    if not repeat_seen:
-        tickets = [ticket for ticket in tickets if ticket.id not in seen_ticket_ids]
-
-    if db_conn and apply:
-        tickets = [t for t in tickets if not report_storage.was_ticket_processed(db_conn, t.id)]
-
     print(f"Chamados elegíveis encontrados: {len(tickets)}")
 
     for ticket in tickets:
-        seen_ticket_ids.add(ticket.id)
         try:
             process_ticket(
                 ticket,
@@ -512,28 +560,21 @@ def run_cycle(
                 tz_name=tz_name,
                 db_conn=db_conn,
             )
+        except (TransientGlpiError, LDAPException, OSError):
+            raise
         except Exception as e:
             print(f"Erro ao processar chamado {ticket.id}: {e}", file=sys.stderr)
             if apply:
                 try:
                     note = build_processing_error_note(ticket, e)
-                    glpi.add_followup(ticket.id, note)
-                    try_update_ticket_status(glpi, ticket.id, SOLVED_STATUS)
+                    _queue_message(ticket, db_conn, note)
+                    _finish_ticket(ticket, glpi, db_conn, solution=False, action="error")
                     print("Nota adicionada no GLPI informando falha no processamento.")
                 except Exception as followup_error:
                     print(
                         f"Erro ao adicionar nota no chamado {ticket.id}: {followup_error}",
                         file=sys.stderr,
                     )
-                finally:
-                    if db_conn:
-                        report_storage.mark_ticket_processed(
-                            db_conn,
-                            ticket_id=ticket.id,
-                            action="error",
-                            login=ticket.login,
-                            note=str(e),
-                        )
             else:
                 print("DRY-RUN: uma nota seria adicionada no GLPI informando falha no processamento.")
 
@@ -618,12 +659,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--repeat-seen",
         action="store_true",
-        help="No modo --poll, reprocessa chamados já vistos na mesma execução.",
+        help="Obsoleto: tickets VPN ativos já são sempre reavaliados.",
     )
     parser.add_argument(
         "--statuses",
         default=",".join(DEFAULT_TICKET_STATUSES),
-        help="Status GLPI separados por vírgula usados na busca. Padrão: 2.",
+        help="Status GLPI separados por vírgula usados na busca. Padrão: 1,2.",
     )
     parser.add_argument(
         "--db-path",
@@ -633,11 +674,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     statuses = parse_statuses(args.statuses)
+    if args.repeat_seen:
+        print("Aviso: --repeat-seen foi descontinuado; tickets VPN ativos são sempre reavaliados.", file=sys.stderr)
 
     db_conn = report_storage.connect(args.db_path)
     report_storage.initialize(db_conn)
 
-    glpi = GlpiClient(load_glpi_config(), debug=args.debug)
+    glpi_config = load_glpi_config()
+    glpi = GlpiClient(glpi_config, debug=args.debug)
 
     try:
         if args.debug:
@@ -673,21 +717,29 @@ def main(argv: list[str] | None = None) -> int:
         if args.debug:
             print("DEBUG AD conectado", flush=True)
 
-        seen_ticket_ids: set[int] = set()
         while True:
-            run_cycle(
-                glpi=glpi,
-                ad_conn=ad_conn,
-                ad_config=ad_config,
-                ticket_id=args.ticket_id,
-                limit=args.limit,
-                statuses=statuses,
-                apply=args.apply,
-                tz_name=args.tz,
-                seen_ticket_ids=seen_ticket_ids,
-                repeat_seen=args.repeat_seen or not args.poll,
-                db_conn=db_conn,
-            )
+            try:
+                run_cycle(glpi=glpi, ad_conn=ad_conn, ad_config=ad_config,
+                          ticket_id=args.ticket_id, limit=args.limit, statuses=statuses,
+                          apply=args.apply, tz_name=args.tz, db_conn=db_conn)
+            except (TransientGlpiError, LDAPException, OSError) as e:
+                if not args.poll:
+                    raise
+                print(f"Falha transitória: {e}. Reconectando no próximo ciclo.", file=sys.stderr)
+                try:
+                    glpi.kill_session()
+                except Exception:
+                    pass
+                glpi = GlpiClient(glpi_config, debug=args.debug)
+                try:
+                    glpi.init_session()
+                    # A conexão LDAP pode ter se tornado inválida mesmo quando o
+                    # erro veio da consulta; recriá-la torna o próximo ciclo independente.
+                    ad_conn = ad.connect_ad(ad_config)
+                except (TransientGlpiError, LDAPException, OSError) as reconnect_error:
+                    print(f"Reconexão ainda indisponível: {reconnect_error}", file=sys.stderr)
+                    time.sleep(args.interval)
+                    continue
 
             if not args.poll:
                 break

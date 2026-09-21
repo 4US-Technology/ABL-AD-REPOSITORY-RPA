@@ -78,8 +78,42 @@ def initialize(conn: sqlite3.Connection) -> None:
             note TEXT,
             PRIMARY KEY (ticket_id)
         );
+
+        CREATE TABLE IF NOT EXISTS vpn_ticket_state (
+            ticket_id INTEGER PRIMARY KEY,
+            stage TEXT NOT NULL,
+            login TEXT NOT NULL,
+            planned_expiry TEXT,
+            glpi_message TEXT,
+            updated_at TEXT NOT NULL
+        );
         """
     )
+    conn.commit()
+
+
+def get_vpn_state(conn: sqlite3.Connection, ticket_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM vpn_ticket_state WHERE ticket_id = ?", (ticket_id,)).fetchone()
+
+
+def save_vpn_state(
+    conn: sqlite3.Connection, ticket_id: int, stage: str, login: str,
+    planned_expiry: str | None = None, glpi_message: str | None = None,
+) -> None:
+    conn.execute(
+        """INSERT INTO vpn_ticket_state (ticket_id, stage, login, planned_expiry, glpi_message, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(ticket_id) DO UPDATE SET stage=excluded.stage, login=excluded.login,
+           planned_expiry=excluded.planned_expiry, glpi_message=excluded.glpi_message,
+           updated_at=excluded.updated_at""",
+        (ticket_id, stage, login, planned_expiry, glpi_message,
+         datetime.utcnow().isoformat(timespec="seconds") + "Z"),
+    )
+    conn.commit()
+
+
+def clear_vpn_state(conn: sqlite3.Connection, ticket_id: int) -> None:
+    conn.execute("DELETE FROM vpn_ticket_state WHERE ticket_id = ?", (ticket_id,))
     conn.commit()
 
 

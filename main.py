@@ -92,13 +92,18 @@ def run_general(argv: list[str]) -> int:
             print("=== EMAIL ===")
             email_code = emailvencimentosenha.main(email_args)
             if email_code != 0:
-                return email_code
-            last_email_run_date = now.date().isoformat()
+                if args.once:
+                    return email_code
+                print(f"Erro no fluxo de e-mail (código {email_code}); continuando o polling.", file=sys.stderr)
+            else:
+                last_email_run_date = now.date().isoformat()
 
         print("\n=== RESET ===")
         reset_code = reset_vpn.main(reset_args)
         if reset_code != 0:
-            return reset_code
+            if args.once:
+                return reset_code
+            print(f"Erro no fluxo de reset (código {reset_code}); continuando o polling.", file=sys.stderr)
 
         if args.once:
             return 0

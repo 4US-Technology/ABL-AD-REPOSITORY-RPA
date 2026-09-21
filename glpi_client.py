@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from http.client import IncompleteRead
 import json
 import mimetypes
 import os
@@ -12,6 +13,10 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+
+class TransientGlpiError(RuntimeError):
+    """Falha de transporte cuja conclusão no servidor pode ser desconhecida."""
 
 
 @dataclass
@@ -83,25 +88,62 @@ class GlpiClient:
             url = f"{url}?{urlencode(params, doseq=True)}"
 
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        request = Request(url, data=data, headers=self.headers(), method=method)
-        try:
-            with urlopen(request, timeout=30, context=self.ssl_context) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-                content_type = response.headers.get("Content-Type", "")
-                if self.debug:
-                    print(f"DEBUG {method} {url}", flush=True)
-                    print(
-                        f"DEBUG status={response.status} content_type={content_type}",
-                        flush=True,
-                    )
-                if not raw:
-                    return None
-                return json.loads(raw)
-        except HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {e.code} em {url}: {detail}") from e
-        except URLError as e:
-            raise RuntimeError(f"Falha de conexão em {url}: {e}") from e
+        return self._request_json(method, url, data=data)
+
+    def _request_json(self, method: str, url: str, *, data: bytes | None) -> Any:
+        """Executa uma requisição JSON e renova uma sessão GLPI expirada uma vez."""
+        for attempt in range(2):
+            request = Request(url, data=data, headers=self.headers(), method=method)
+            try:
+                with urlopen(request, timeout=30, context=self.ssl_context) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                    content_type = response.headers.get("Content-Type", "")
+                    if self.debug:
+                        print(f"DEBUG {method} {url}", flush=True)
+                        print(f"DEBUG status={response.status} content_type={content_type}", flush=True)
+                    if not raw:
+                        return None
+                    return json.loads(raw)
+            except IncompleteRead as e:
+                raise TransientGlpiError(f"Leitura incompleta do GLPI em {url}: {e}") from e
+            except HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")
+                except IncompleteRead as read_error:
+                    raise TransientGlpiError(f"Leitura incompleta do GLPI em {url}: {read_error}") from read_error
+                if e.code == 401 and self.session_token and attempt == 0:
+                    self.session_token = None
+                    self.init_session()
+                    continue
+                raise RuntimeError(f"HTTP {e.code} em {url}: {detail}") from e
+            except URLError as e:
+                raise TransientGlpiError(f"Falha de conexão em {url}: {e}") from e
+        raise AssertionError("tentativas GLPI esgotadas")
+
+    def _request_multipart(self, method: str, url: str, *, data: bytes, content_type: str) -> Any:
+        for attempt in range(2):
+            request = Request(url, data=data, headers=self.headers(content_type=content_type), method=method)
+            try:
+                with urlopen(request, timeout=30, context=self.ssl_context) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                    if self.debug:
+                        print(f"DEBUG {method} {url}", flush=True)
+                    return json.loads(raw) if raw else None
+            except IncompleteRead as e:
+                raise TransientGlpiError(f"Leitura incompleta do GLPI em {url}: {e}") from e
+            except HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8", errors="replace")
+                except IncompleteRead as read_error:
+                    raise TransientGlpiError(f"Leitura incompleta do GLPI em {url}: {read_error}") from read_error
+                if e.code == 401 and self.session_token and attempt == 0:
+                    self.session_token = None
+                    self.init_session()
+                    continue
+                raise RuntimeError(f"HTTP {e.code} em {url}: {detail}") from e
+            except URLError as e:
+                raise TransientGlpiError(f"Falha de conexão em {url}: {e}") from e
+        raise AssertionError("tentativas GLPI esgotadas")
 
     def request_multipart(
         self,
@@ -139,30 +181,9 @@ class GlpiClient:
 
         parts.append(f"--{boundary}--\r\n".encode("utf-8"))
         data = b"".join(parts)
-        request = Request(
-            url,
-            data=data,
-            headers=self.headers(content_type=f"multipart/form-data; boundary={boundary}"),
-            method=method,
+        return self._request_multipart(
+            method, url, data=data, content_type=f"multipart/form-data; boundary={boundary}"
         )
-        try:
-            with urlopen(request, timeout=30, context=self.ssl_context) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-                content_type = response.headers.get("Content-Type", "")
-                if self.debug:
-                    print(f"DEBUG {method} {url}", flush=True)
-                    print(
-                        f"DEBUG status={response.status} content_type={content_type}",
-                        flush=True,
-                    )
-                if not raw:
-                    return None
-                return json.loads(raw)
-        except HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {e.code} em {url}: {detail}") from e
-        except URLError as e:
-            raise RuntimeError(f"Falha de conexão em {url}: {e}") from e
 
     def init_session(self) -> None:
         data = self.request("GET", "initSession")
@@ -215,6 +236,15 @@ class GlpiClient:
             f"Ticket/{ticket_id}",
             body={"input": {"id": ticket_id, **fields}},
         )
+
+    def ticket_has_message(self, ticket_id: int, content: str, *, solution: bool) -> bool:
+        endpoint = "ITILSolution" if solution else "ITILFollowup"
+        items = self.request("GET", f"Ticket/{ticket_id}/{endpoint}")
+        if isinstance(items, dict):
+            items = items.get("data", items.get("items", []))
+        if not isinstance(items, list):
+            return False
+        return any(isinstance(item, dict) and str(item.get("content") or "") == content for item in items)
 
     def add_document_to_ticket(self, ticket_id: int, file_path: str | Path, *, name: str | None = None) -> Any:
         path = Path(file_path)
