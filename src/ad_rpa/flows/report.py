@@ -1,19 +1,14 @@
-#!/usr/bin/env python3
 from __future__ import annotations
-
 import argparse
 import shutil
 import sys
 import time
 from datetime import datetime, timezone
-
-import ad_directory as ad
-import emailvencimentosenha as email_jobs
-import report_storage
-import reset_vpn
-from glpi_client import GlpiClient, load_config as load_glpi_config
-
-
+from ..integrations import ad
+from ..integrations.glpi import GlpiClient, load_config as load_glpi_config
+from ..storage import database
+from . import email as email_jobs
+from . import vpn
 def clip(value: str, width: int) -> str:
     if width <= 0:
         return ""
@@ -22,8 +17,6 @@ def clip(value: str, width: int) -> str:
     if width == 1:
         return value[:1]
     return value[: width - 1] + "…"
-
-
 def render_table(headers: list[str], rows: list[list[str]], widths: list[int]) -> list[str]:
     header = " | ".join(clip(text, width) for text, width in zip(headers, widths))
     separator = "-+-".join("-" * width for width in widths)
@@ -31,8 +24,6 @@ def render_table(headers: list[str], rows: list[list[str]], widths: list[int]) -
     for row in rows:
         lines.append(" | ".join(clip(text, width) for text, width in zip(row, widths)))
     return lines
-
-
 def build_user_rows(users: list[email_jobs.ExpiringUser], tz_name: str) -> list[list[str]]:
     rows: list[list[str]] = []
     now_utc = datetime.now(timezone.utc)
@@ -46,30 +37,25 @@ def build_user_rows(users: list[email_jobs.ExpiringUser], tz_name: str) -> list[
             status = "ok"
         rows.append([user.login, user.name, expires_text, user.email or "-", status])
     return rows
-
-
-def build_ticket_rows(tickets: list[reset_vpn.VpnResetTicket]) -> list[list[str]]:
+def build_ticket_rows(tickets: list[vpn.VpnResetTicket]) -> list[list[str]]:
     rows: list[list[str]] = []
     for ticket in tickets:
         requesters = ", ".join(ticket.requester_logins) or "-"
-        owner = "sim" if reset_vpn.requester_matches_login(ticket) else "nao"
+        owner = "sim" if vpn.requester_matches_login(ticket) else "nao"
         rows.append([str(ticket.id), str(ticket.status or "-"), ticket.login, requesters, owner])
     return rows
-
-
 def render_screen(
     *,
     users: list[email_jobs.ExpiringUser],
-    tickets: list[reset_vpn.VpnResetTicket],
+    tickets: list[vpn.VpnResetTicket],
     tz_name: str,
     days: int,
     interval: int,
-    snapshot: report_storage.ReportSnapshot,
+    snapshot: database.ReportSnapshot,
     db_path: str,
 ) -> str:
     width = shutil.get_terminal_size((140, 40)).columns
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     user_lines = render_table(
         ["login", "nome", "expira", "email", "status"],
         build_user_rows(users, tz_name),
@@ -77,7 +63,6 @@ def render_screen(
     )
     if len(user_lines) == 2:
         user_lines.append("(nenhum usuario na janela)")
-
     ticket_lines = render_table(
         ["ticket", "status", "login", "requerente", "mesmo dono"],
         build_ticket_rows(tickets),
@@ -85,7 +70,6 @@ def render_screen(
     )
     if len(ticket_lines) == 2:
         ticket_lines.append("(nenhum chamado ativo)")
-
     lines = [
         f"Relatorio AD/GLPI  {timestamp}",
         f"Usuarios expiram em ate {days} dia(s); chamados ativos status 1,2; refresh {interval}s",
@@ -99,30 +83,23 @@ def render_screen(
         *ticket_lines,
     ]
     return "\x1b[2J\x1b[H" + "\n".join(lines)
-
-
 def collect_users(days: int) -> list[email_jobs.ExpiringUser]:
     ad_config = ad.load_config()
     conn = ad.connect_ad(ad_config)
     return email_jobs.find_expiring_users(conn, ad_config, days=days, from_date=None)
-
-
-def collect_tickets(limit: int) -> list[reset_vpn.VpnResetTicket]:
+def collect_tickets(limit: int) -> list[vpn.VpnResetTicket]:
     glpi = GlpiClient(load_glpi_config(), debug=False)
     glpi.init_session()
     try:
-        return reset_vpn.load_vpn_reset_tickets(
+        return vpn.load_vpn_reset_tickets(
             glpi,
             limit=limit,
-            statuses=reset_vpn.ACTIVE_TICKET_STATUSES,
+            statuses=vpn.ACTIVE_TICKET_STATUSES,
         )
     finally:
         glpi.kill_session()
-
-
 def main(argv: list[str] | None = None) -> int:
     ad.load_env_file()
-
     parser = argparse.ArgumentParser(
         description="Mostra usuarios a vencer e chamados GLPI ativos em uma tela de relatorio."
     )
@@ -133,14 +110,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db-path", default="relatorio.db", help="Arquivo SQLite para armazenar snapshots. Padrão: relatorio.db.")
     parser.add_argument("--once", action="store_true", help="Renderiza uma vez e sai.")
     args = parser.parse_args(argv)
-
-    conn = report_storage.connect(args.db_path)
+    conn = database.connect(args.db_path)
     try:
-        report_storage.initialize(conn)
+        database.initialize(conn)
         while True:
             users = collect_users(args.days)
             tickets = collect_tickets(args.limit)
-            snapshot = report_storage.store_snapshot(
+            snapshot = database.store_snapshot(
                 conn,
                 days=args.days,
                 ticket_limit=args.limit,
@@ -159,10 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             sys.stdout.flush()
-
             if args.once:
                 break
-
             time.sleep(args.interval)
         return 0
     except KeyboardInterrupt:
@@ -175,7 +149,5 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         conn.close()
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ad-rpa"
+version = "0.1.0"
+description = "Automação operacional AD, GLPI e e-mail"
+requires-python = ">=3.11"
+dependencies = ["ldap3==2.9.1", "pyasn1==0.6.4"]
+
+[project.scripts]
+ad-rpa = "ad_rpa.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+lint.select = ["E", "F"]
+lint.ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+ignore_missing_imports = true

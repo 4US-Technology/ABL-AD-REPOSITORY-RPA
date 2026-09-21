@@ -1,9 +1,6 @@
+.git
+.venv
+__pycache__
+*.pyc
 .env
-.git/
-.venv/
-.vscode/
-__pycache__/
-*.py[cod]
-*.db
-files/
-README.md
+relatorio.db

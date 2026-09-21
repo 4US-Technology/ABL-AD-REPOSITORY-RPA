@@ -5,9 +5,32 @@ services:
       dockerfile: Dockerfile
     image: ad-rpa:local
     container_name: ad-rpa-main
-    env_file:
-      - .env
-    command: ["--apply"]
+    command: ["--apply", "--interval", "60"]
     restart: unless-stopped
     volumes:
-      - ./relatorio.db:/app/relatorio.db
+      - ad-rpa-data:/data
+    secrets:
+      - ad_bind_password
+      - glpi_user_token
+      - smtp_password
+    environment:
+      AD_BIND_PASSWORD_FILE: /run/secrets/ad_bind_password
+      GLPI_USER_TOKEN_FILE: /run/secrets/glpi_user_token
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      AD_RPA_DB_PATH: /data/ad-rpa.db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/livez')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ad-rpa-data:
+
+secrets:
+  ad_bind_password:
+    file: ./secrets/ad_bind_password
+  glpi_user_token:
+    file: ./secrets/glpi_user_token
+  smtp_password:
+    file: ./secrets/smtp_password

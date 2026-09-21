@@ -1,20 +1,14 @@
 from __future__ import annotations
-
 import os
 import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
-
 from ldap3 import ALL, MODIFY_REPLACE, SUBTREE, Connection, Server, Tls
 from ldap3.core.exceptions import LDAPException
 from ldap3.utils.conv import escape_filter_chars
-
-
 FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
-
-
 @dataclass
 class AdConfig:
     server: str
@@ -27,8 +21,6 @@ class AdConfig:
     base_dn: str
     search_attr: str
     expiry_attr: str
-
-
 @dataclass
 class Decision:
     login: str
@@ -38,12 +30,9 @@ class Decision:
     should_renew: bool
     new_expiry: datetime | None
     reason: str
-
-
 def load_env_file(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
-
     with open(path, encoding="utf-8") as env_file:
         for raw_line in env_file:
             line = raw_line.strip()
@@ -51,19 +40,13 @@ def load_env_file(path: str = ".env") -> None:
                 continue
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 def env_required(name: str) -> str:
     value = os.getenv(name)
     if value is None or value == "":
         raise RuntimeError(f"Variável de ambiente obrigatória ausente: {name}")
     return value
-
-
 def env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).lower() == "true"
-
-
 def load_config() -> AdConfig:
     return AdConfig(
         server=env_required("AD_SERVER"),
@@ -77,8 +60,6 @@ def load_config() -> AdConfig:
         search_attr=os.getenv("AD_SEARCH_ATTR", "sAMAccountName"),
         expiry_attr=os.getenv("AD_EXPIRY_ATTR", "accountExpires"),
     )
-
-
 def connect_ad(config: AdConfig) -> Connection:
     validate = ssl.CERT_REQUIRED if config.tls_validate else ssl.CERT_NONE
     tls = Tls(validate=validate)
@@ -97,41 +78,30 @@ def connect_ad(config: AdConfig) -> Connection:
         auto_bind=False,
         receive_timeout=int(os.getenv("AD_RECEIVE_TIMEOUT", "30")),
     )
-
     if conn.open() is False:
         raise RuntimeError(f"Falha ao abrir conexão AD: {conn.result}")
     if config.use_starttls and not conn.start_tls():
         raise RuntimeError(f"Falha ao iniciar StartTLS no AD: {conn.result}")
     if not conn.bind():
         raise RuntimeError(f"Falha ao autenticar no AD: {conn.result}")
-
     return conn
-
-
 def filetime_to_datetime(value: Any) -> datetime | None:
     if value in (None, "", 0, "0", 9223372036854775807, "9223372036854775807"):
         return None
     if isinstance(value, datetime):
-        # ldap3 converte FILETIME 0 para datetime da época (1601-01-01), que significa nunca expira
         dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         if dt <= FILETIME_EPOCH:
             return None
         return dt
     filetime = int(value)
     return FILETIME_EPOCH + timedelta(microseconds=filetime / 10)
-
-
 def datetime_to_filetime(value: datetime) -> int:
     utc_value = value.astimezone(timezone.utc)
     return int((utc_value - FILETIME_EPOCH).total_seconds() * 10_000_000)
-
-
 def format_dt(value: datetime | None, tz_name: str) -> str:
     if value is None:
         return "Sem data definida"
     return value.astimezone(ZoneInfo(tz_name)).strftime("%d/%m/%Y %H:%M:%S %Z")
-
-
 def add_months(value: datetime, months: int) -> datetime:
     month = value.month - 1 + months
     year = value.year + month // 12
@@ -152,13 +122,10 @@ def add_months(value: datetime, months: int) -> datetime:
     ]
     day = min(value.day, month_days[month - 1])
     return value.replace(year=year, month=month, day=day)
-
-
 def find_user(conn: Connection, config: AdConfig, login: str, *, email: str | None = None):
     safe_login = escape_filter_chars(login)
     safe_attr = escape_filter_chars(config.search_attr)
     attrs = ["cn", "displayName", "mail", "sAMAccountName", "userPrincipalName", config.expiry_attr]
-
     ok = conn.search(
         search_base=config.base_dn,
         search_filter=f"(&(objectClass=user)(!(objectClass=computer))({safe_attr}={safe_login}))",
@@ -167,9 +134,6 @@ def find_user(conn: Connection, config: AdConfig, login: str, *, email: str | No
     )
     if ok and len(conn.entries) == 1:
         return conn.entries[0]
-
-    # fallback: busca pelo atributo mail quando o login não bate com sAMAccountName
-    # (ex: usuários externos que preenchem o formulário com o e-mail)
     if email and "@" in email:
         safe_email = escape_filter_chars(email)
         ok = conn.search(
@@ -180,13 +144,8 @@ def find_user(conn: Connection, config: AdConfig, login: str, *, email: str | No
         )
         if ok and len(conn.entries) == 1:
             return conn.entries[0]
-
     raise RuntimeError(f"Usuário não encontrado no AD: {login}")
-
-
 RENEWAL_WINDOW_DAYS = 3
-
-
 def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision:
     current_expiry = filetime_to_datetime(getattr(user, config.expiry_attr).value)
     dn = str(user.entry_dn)
@@ -200,11 +159,9 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
             None,
             "Acesso configurado para nunca expirar.",
         )
-
     now = datetime.now(timezone.utc)
     is_expired = current_expiry <= now
     is_expiring_soon = not is_expired and current_expiry <= now + timedelta(days=RENEWAL_WINDOW_DAYS)
-
     if not is_expired and not is_expiring_soon:
         return Decision(
             login,
@@ -215,13 +172,11 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
             None,
             "Acesso ainda não está expirado.",
         )
-
     reason = (
         "Acesso expirado. Renovação permitida por regra."
         if is_expired
         else f"Acesso vence em até {RENEWAL_WINDOW_DAYS} dias. Renovação preventiva permitida."
     )
-
     new_expiry = add_months(now.astimezone(ZoneInfo(tz_name)), 3).replace(
         hour=23,
         minute=59,
@@ -237,12 +192,9 @@ def build_decision(user, config: AdConfig, login: str, tz_name: str) -> Decision
         new_expiry,
         reason,
     )
-
-
 def apply_renewal(conn: Connection, config: AdConfig, decision: Decision) -> None:
     if decision.new_expiry is None:
         raise RuntimeError("Não há nova expiração calculada.")
-
     ok = conn.modify(
         decision.dn,
         {

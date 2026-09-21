@@ -5,14 +5,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
+COPY pyproject.toml ./
+COPY src ./src
+RUN pip install --no-cache-dir .
 
 RUN useradd --uid 1000 --no-create-home --shell /bin/false rpauser \
-    && chown -R rpauser:rpauser /app
+    && mkdir -p /data \
+    && chown -R rpauser:rpauser /app /data
 
 USER rpauser
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["ad-rpa"]

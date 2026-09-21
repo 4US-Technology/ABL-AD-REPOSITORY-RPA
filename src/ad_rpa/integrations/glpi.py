@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import base64
 from http.client import IncompleteRead
 import json
@@ -13,12 +12,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-
-
 class TransientGlpiError(RuntimeError):
     """Falha de transporte cuja conclusão no servidor pode ser desconhecida."""
-
-
 @dataclass
 class GlpiConfig:
     api_url: str
@@ -27,22 +22,17 @@ class GlpiConfig:
     login: str | None
     password: str | None
     verify_tls: bool
-
-
 def env_required(name: str) -> str:
     value = os.getenv(name)
     if value is None or value == "":
         raise RuntimeError(f"Variável de ambiente obrigatória ausente: {name}")
     return value
-
-
 def load_config() -> GlpiConfig:
     user_token = os.getenv("GLPI_USER_TOKEN") or None
     login = os.getenv("GLPI_LOGIN") or None
     password = os.getenv("GLPI_PASSWORD") or None
     if not user_token and not (login and password):
         raise RuntimeError("Configure GLPI_USER_TOKEN ou GLPI_LOGIN + GLPI_PASSWORD no .env")
-
     return GlpiConfig(
         api_url=env_required("GLPI_URL").rstrip("/"),
         app_token=os.getenv("GLPI_APP_TOKEN") or None,
@@ -51,15 +41,12 @@ def load_config() -> GlpiConfig:
         password=password,
         verify_tls=os.getenv("GLPI_VERIFY_TLS", "true").lower() == "true",
     )
-
-
 class GlpiClient:
     def __init__(self, config: GlpiConfig, *, debug: bool = False) -> None:
         self.config = config
         self.debug = debug
         self.session_token: str | None = None
         self.ssl_context = None if config.verify_tls else ssl._create_unverified_context()
-
     def headers(self, *, content_type: str | None = "application/json") -> dict[str, str]:
         headers = {"Accept": "application/json"}
         if content_type:
@@ -74,7 +61,6 @@ class GlpiClient:
             credentials = f"{self.config.login}:{self.config.password}".encode("utf-8")
             headers["Authorization"] = "Basic " + base64.b64encode(credentials).decode("ascii")
         return headers
-
     def request(
         self,
         method: str,
@@ -86,10 +72,8 @@ class GlpiClient:
         url = f"{self.config.api_url}/{endpoint.lstrip('/')}"
         if params:
             url = f"{url}?{urlencode(params, doseq=True)}"
-
         data = json.dumps(body).encode("utf-8") if body is not None else None
         return self._request_json(method, url, data=data)
-
     def _request_json(self, method: str, url: str, *, data: bytes | None) -> Any:
         """Executa uma requisição JSON e renova uma sessão GLPI expirada uma vez."""
         for attempt in range(2):
@@ -119,7 +103,6 @@ class GlpiClient:
             except URLError as e:
                 raise TransientGlpiError(f"Falha de conexão em {url}: {e}") from e
         raise AssertionError("tentativas GLPI esgotadas")
-
     def _request_multipart(self, method: str, url: str, *, data: bytes, content_type: str) -> Any:
         for attempt in range(2):
             request = Request(url, data=data, headers=self.headers(content_type=content_type), method=method)
@@ -144,7 +127,6 @@ class GlpiClient:
             except URLError as e:
                 raise TransientGlpiError(f"Falha de conexão em {url}: {e}") from e
         raise AssertionError("tentativas GLPI esgotadas")
-
     def request_multipart(
         self,
         method: str,
@@ -156,7 +138,6 @@ class GlpiClient:
         url = f"{self.config.api_url}/{endpoint.lstrip('/')}"
         boundary = f"----glpi-{uuid.uuid4().hex}"
         parts: list[bytes] = []
-
         for name, value in fields.items():
             parts.append(
                 (
@@ -165,7 +146,6 @@ class GlpiClient:
                     f"{value}\r\n"
                 ).encode("utf-8")
             )
-
         for name, path in files.items():
             filename = path.name
             content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -178,31 +158,26 @@ class GlpiClient:
             )
             parts.append(path.read_bytes())
             parts.append(b"\r\n")
-
         parts.append(f"--{boundary}--\r\n".encode("utf-8"))
         data = b"".join(parts)
         return self._request_multipart(
             method, url, data=data, content_type=f"multipart/form-data; boundary={boundary}"
         )
-
     def init_session(self) -> None:
         data = self.request("GET", "initSession")
         token = data.get("session_token") if isinstance(data, dict) else None
         if not token:
             raise RuntimeError(f"GLPI não retornou session_token: {data}")
         self.session_token = str(token)
-
     def kill_session(self) -> None:
         if self.session_token:
             self.request("GET", "killSession")
             self.session_token = None
-
     def get_item(self, item_type: str, item_id: int) -> dict[str, Any]:
         data = self.request("GET", f"{item_type}/{item_id}")
         if not isinstance(data, dict):
             raise RuntimeError(f"Resposta inesperada do GLPI em {item_type}/{item_id}: {data}")
         return data
-
     def add_followup(self, ticket_id: int, content: str) -> Any:
         return self.request(
             "POST",
@@ -215,7 +190,6 @@ class GlpiClient:
                 }
             },
         )
-
     def add_solution(self, ticket_id: int, content: str) -> Any:
         return self.request(
             "POST",
@@ -229,14 +203,12 @@ class GlpiClient:
                 }
             },
         )
-
     def update_ticket(self, ticket_id: int, fields: dict[str, Any]) -> Any:
         return self.request(
             "PUT",
             f"Ticket/{ticket_id}",
             body={"input": {"id": ticket_id, **fields}},
         )
-
     def ticket_has_message(self, ticket_id: int, content: str, *, solution: bool) -> bool:
         endpoint = "ITILSolution" if solution else "ITILFollowup"
         items = self.request("GET", f"Ticket/{ticket_id}/{endpoint}")
@@ -245,12 +217,10 @@ class GlpiClient:
         if not isinstance(items, list):
             return False
         return any(isinstance(item, dict) and str(item.get("content") or "") == content for item in items)
-
     def add_document_to_ticket(self, ticket_id: int, file_path: str | Path, *, name: str | None = None) -> Any:
         path = Path(file_path)
         if not path.is_file():
             raise RuntimeError(f"Arquivo de anexo não encontrado: {path}")
-
         document_name = name or path.name
         upload = self.request_multipart(
             "POST",
@@ -270,7 +240,6 @@ class GlpiClient:
         document_id = upload.get("id") if isinstance(upload, dict) else None
         if not document_id:
             raise RuntimeError(f"GLPI não retornou id do documento enviado: {upload}")
-
         return self.request(
             "POST",
             "Document_Item",
@@ -282,7 +251,6 @@ class GlpiClient:
                 }
             },
         )
-
     def search_formcreator_ticket_ids(
         self,
         *,
@@ -302,10 +270,8 @@ class GlpiClient:
             "criteria[0][searchtype]": "equals",
             "criteria[0][value]": str(form_id),
         }
-
         data = self.request("GET", "search/PluginFormcreatorFormAnswer", params=params)
         rows = data.get("data", []) if isinstance(data, dict) else []
-
         ticket_ids: list[int] = []
         seen_ticket_ids: set[int] = set()
         for row in rows:
@@ -315,7 +281,6 @@ class GlpiClient:
                 formanswer_id = int(row.get("2"))
             except (TypeError, ValueError):
                 continue
-
             linked_items = self.request(
                 "GET",
                 f"PluginFormcreatorFormAnswer/{formanswer_id}/Item_Ticket",
@@ -324,7 +289,6 @@ class GlpiClient:
                 linked_items = linked_items.get("data", [])
             if not isinstance(linked_items, list):
                 continue
-
             for item in linked_items:
                 if not isinstance(item, dict):
                     continue
@@ -338,5 +302,4 @@ class GlpiClient:
                 ticket_ids.append(ticket_id)
                 if len(ticket_ids) >= limit:
                     return ticket_ids
-
         return ticket_ids
