@@ -256,7 +256,6 @@ class GlpiClient:
         *,
         form_id: int,
         limit: int,
-        statuses: tuple[str, ...] = (),
     ) -> list[int]:
         params = {
             "forcedisplay[0]": 2,

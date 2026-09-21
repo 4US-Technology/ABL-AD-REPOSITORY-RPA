@@ -131,7 +131,7 @@ def clear_vpn_state(conn: sqlite3.Connection, ticket_id: int) -> None:
     conn.commit()
 def was_ticket_processed(conn: sqlite3.Connection, ticket_id: int) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM ticket_actions WHERE ticket_id = ? LIMIT 1",
+        "SELECT 1 FROM ticket_actions WHERE ticket_id = ? AND action != 'error' LIMIT 1",
         (ticket_id,),
     ).fetchone()
     return row is not None

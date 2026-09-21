@@ -154,7 +154,7 @@ def build_message(
         f"{FORM_URL}\n\n"
         "Preencha os campos:\n"
         f"- Nome Completo do usuário\n"
-        f"- Login da VPN / Internet\n\n"
+        f"- Usuário(Login) da VPN / Internet\n\n"
         "Login sugerido para o formulário:\n"
         f"{user.login}\n"
     )
@@ -167,7 +167,7 @@ def build_message(
         "<p>Preencha os campos:</p>"
         "<ul>"
         "<li>Nome Completo do usuário</li>"
-        "<li>Login da VPN / Internet</li>"
+        "<li>Usuário(Login) da VPN / Internet</li>"
         "</ul>"
         f"<p><strong>Login sugerido para o formulário:</strong><br>{user.login}</p>"
     )
@@ -195,7 +195,7 @@ def build_graph_message_payload(
         "<p>Preencha os campos:</p>"
         "<ul>"
         "<li>Nome Completo do usuário</li>"
-        "<li>Login da VPN / Internet</li>"
+        "<li>Usuário(Login) da VPN / Internet</li>"
         "</ul>"
         f"<p><strong>Login sugerido para o formulário:</strong><br>{user.login}</p>"
     )

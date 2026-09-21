@@ -209,7 +209,6 @@ def search_vpn_reset_ticket_ids(
     return client.search_formcreator_ticket_ids(
         form_id=RESET_FORM_ID,
         limit=limit,
-        statuses=statuses,
     )
 def load_vpn_reset_tickets(
     client: GlpiClient,
