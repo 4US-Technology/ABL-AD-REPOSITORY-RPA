@@ -7,6 +7,7 @@ services:
     container_name: ad-rpa-main
     command: ["--apply", "--interval", "60"]
     restart: unless-stopped
+    env_file: .env
     volumes:
       - ad-rpa-data:/data
     secrets:
