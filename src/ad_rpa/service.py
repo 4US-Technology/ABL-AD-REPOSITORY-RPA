@@ -32,7 +32,7 @@ def run(*, apply: bool, interval: int, tz_name: str, once: bool = False, days: i
                 logger = get_logger(name)
                 if apply: arguments.append("--apply")
                 try:
-                    code = handler(arguments)  
+                    code = handler(arguments)
                     state.cycles[name] += 1
                     if code:
                         state.failures[name] += 1
