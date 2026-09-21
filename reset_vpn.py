@@ -28,6 +28,7 @@ LOGIN_LABEL = "Login da Rede/VPN ou Internet"
 VPN_LOGIN_LABELS = (
     LOGIN_LABEL,
     "Login da VPN / Internet",
+    "Usuário(Login) da VPN / Internet",
 )
 SKYONE_LOGIN_LABEL = "Login da Skyone"
 FORM_URLS = (
@@ -122,6 +123,23 @@ def load_ticket_requester_logins(
             if login:
                 requester_logins.append(login)
                 break
+
+        # Inclui e-mails do usuário GLPI para cobrir o caso em que o formulário
+        # é preenchido com e-mail em vez do login de rede (ex: alaor@ablprime.com.br
+        # em vez de alaor.santos). normalize_login remove o domínio, então
+        # normalize("alaor@ablprime.com.br") == "alaor" que pode não bater com
+        # o sAMAccountName; incluir o e-mail garante que a parte local (normalize)
+        # caia no conjunto de comparação quando o dono do e-mail abriu o chamado.
+        try:
+            user_emails = glpi_list_items(
+                client.request("GET", f"User/{user_id}/UserEmail")
+            )
+            for ue in user_emails:
+                email = str(ue.get("email") or "").strip()
+                if email:
+                    requester_logins.append(email)
+        except Exception:
+            pass
 
     return tuple(requester_logins)
 
