@@ -44,6 +44,8 @@ def normalize_login(value: str | None) -> str:
     login = (value or "").strip().lower()
     if "\\" in login:
         login = login.rsplit("\\", 1)[-1]
+    if "/" in login:
+        login = login.rsplit("/", 1)[-1]
     if "@" in login:
         login = login.split("@", 1)[0]
     return login
@@ -111,11 +113,27 @@ def load_ticket_requester_logins(
         except Exception:
             pass
     return tuple(requester_logins)
-def requester_matches_login(ticket: VpnResetTicket) -> bool:
+def load_owner_emails(ad_conn, ad_config: ad.AdConfig, login: str) -> tuple[str, ...]:
+    """E-mails (mail/UPN) da conta do AD cujo login é `login`. Só leitura; vazio se não achar."""
+    try:
+        user = ad.find_user(ad_conn, ad_config, normalize_login(login))
+    except Exception:
+        return ()
+    emails: list[str] = []
+    for attr in ("mail", "userPrincipalName"):
+        value = str(getattr(getattr(user, attr, None), "value", None) or "").strip().lower()
+        if "@" in value:
+            emails.append(value)
+    return tuple(emails)
+def requester_matches_login(ticket: VpnResetTicket, owner_emails: tuple[str, ...] = ()) -> bool:
     requested_login = normalize_login(ticket.login)
     requester_logins = {normalize_login(login) for login in ticket.requester_logins}
     requester_logins.discard("")
-    return bool(requested_login and requested_login in requester_logins)
+    if requested_login and requested_login in requester_logins:
+        return True
+    # O login do AD nem sempre é a parte local do e-mail (ex.: michele.aguiar / michele.neris@...).
+    requester_emails = {login.strip().lower() for login in ticket.requester_logins if "@" in login}
+    return bool(requester_emails & set(owner_emails))
 def build_requester_mismatch_note(ticket: VpnResetTicket) -> str:
     requesters = ", ".join(ticket.requester_logins) or "não identificado"
     return (
@@ -295,7 +313,9 @@ def process_ticket(
     if state and state["stage"] == "manual_review":
         print("Pendente de revisão manual: expiração no AD divergiu da intenção registrada.")
         return
-    if not requester_matches_login(ticket):
+    if not requester_matches_login(ticket) and not requester_matches_login(
+        ticket, load_owner_emails(ad_conn, ad_config, ticket.login)
+    ):
         note = build_requester_mismatch_note(ticket)
         print("Deve renovar?: NÃO")
         print("Motivo: chamado aberto por usuário diferente do login informado.")

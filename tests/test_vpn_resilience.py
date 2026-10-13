@@ -94,5 +94,45 @@ class VpnResilienceTests(unittest.TestCase):
         self.assertFalse(database.was_ticket_processed(self.conn, 100))
 
 
+class RequesterOwnershipTests(unittest.TestCase):
+    def ticket(self, login, requesters):
+        return vpn.VpnResetTicket(id=1, name="x", status=2, request_type=None, login=login,
+                                  content="", requester_logins=tuple(requesters))
+
+    def test_local_part_of_requester_email_still_matches(self):
+        self.assertTrue(vpn.requester_matches_login(self.ticket("joao.oliveira", ["joao.oliveira@ablprime.com.br"])))
+
+    def test_login_different_from_email_is_rejected_without_ad_mail(self):
+        ticket = self.ticket("michele.aguiar", ["michele.neris@shoppinglagocenter.com.br"])
+        self.assertFalse(vpn.requester_matches_login(ticket))
+
+    def test_requester_email_equal_to_ad_mail_of_login_matches(self):
+        ticket = self.ticket("michele.aguiar", ["michele.neris@shoppinglagocenter.com.br"] * 2)
+        self.assertTrue(vpn.requester_matches_login(ticket, ("michele.neris@shoppinglagocenter.com.br",)))
+
+    def test_other_persons_email_is_still_rejected(self):
+        ticket = self.ticket("michele.aguiar", ["outra.pessoa@ablprime.com.br"])
+        self.assertFalse(vpn.requester_matches_login(ticket, ("michele.neris@shoppinglagocenter.com.br",)))
+
+    def test_requester_login_without_at_never_matches_ad_mail(self):
+        ticket = self.ticket("michele.aguiar", ["michele.neris"])
+        self.assertFalse(vpn.requester_matches_login(ticket, ("michele.neris@shoppinglagocenter.com.br",)))
+
+    def test_slash_domain_prefix_is_stripped(self):
+        self.assertEqual(vpn.normalize_login("ablprime/simone.prado"), "simone.prado")
+        self.assertEqual(vpn.normalize_login("ABLPRIME\\Simone.Prado"), "simone.prado")
+
+    def test_load_owner_emails_reads_mail_and_upn_and_survives_missing_user(self):
+        user = SimpleNamespace(mail=SimpleNamespace(value="Michele.Neris@Shoppinglagocenter.com.br"),
+                               userPrincipalName=SimpleNamespace(value="michele.aguiar@ablprime.local"))
+        with patch.object(vpn.ad, "find_user", return_value=user) as find:
+            emails = vpn.load_owner_emails(object(), object(), "ablprime/michele.aguiar")
+        self.assertEqual(emails, ("michele.neris@shoppinglagocenter.com.br", "michele.aguiar@ablprime.local"))
+        self.assertEqual(find.call_args.args[2], "michele.aguiar")
+        self.assertNotIn("email", find.call_args.kwargs)  # sem fallback por e-mail: não dá para "adotar" login alheio
+        with patch.object(vpn.ad, "find_user", side_effect=RuntimeError("não encontrado")):
+            self.assertEqual(vpn.load_owner_emails(object(), object(), "x"), ())
+
+
 if __name__ == "__main__":
     unittest.main()
