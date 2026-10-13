@@ -15,6 +15,7 @@ def start_server(state: ServiceState, host: str, port: int) -> ThreadingHTTPServ
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args): pass
         def do_GET(self):
+            payload: dict[str, object]
             if self.path == "/livez": payload, code = {"live": state.active}, 200
             elif self.path == "/readyz": payload, code = {"ready": state.ready}, 200 if state.ready else 503
             elif self.path == "/metrics":

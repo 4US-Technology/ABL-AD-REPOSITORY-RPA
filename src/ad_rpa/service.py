@@ -1,6 +1,7 @@
 """Long-running coordinator. A failed integration never stops other flows."""
 from __future__ import annotations
 import time
+from collections.abc import Callable
 from datetime import datetime, time as clock
 from zoneinfo import ZoneInfo
 from .config import Settings
@@ -22,7 +23,7 @@ def run(*, apply: bool, interval: int, tz_name: str, once: bool = False, days: i
     try:
         while True:
             now = datetime.now(tz)
-            flows: list[tuple[str, object, list[str]]] = []
+            flows: list[tuple[str, Callable[[list[str] | None], int], list[str]]] = []
             if once or (now.time() >= clock(7) and last_email_date != now.date().isoformat()):
                 flows.append(("email", email.main, ["--days", str(days), "--tz", tz_name, "--db-path", settings.db_path]))
             flows.extend([

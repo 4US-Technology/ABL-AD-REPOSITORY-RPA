@@ -291,6 +291,7 @@ def send_graph_email(config: GraphConfig, user: ExpiringUser, *, tz_name: str) -
         body=payload,
     )
 def open_smtp(smtp_config: SmtpConfig):
+    server: smtplib.SMTP
     if smtp_config.use_ssl:
         context = ssl.create_default_context()
         server = smtplib.SMTP_SSL(smtp_config.host, smtp_config.port, context=context)
@@ -433,8 +434,12 @@ def main(argv: list[str] | None = None) -> int:
                 print("DRY-RUN: o e-mail seria enviado.")
                 continue
             if email_provider == "graph":
+                if graph_config is None:
+                    raise RuntimeError("Configuração Graph não carregada.")
                 send_graph_email(graph_config, user, tz_name=args.tz)
             else:
+                if smtp_config is None:
+                    raise RuntimeError("Configuração SMTP não carregada.")
                 message = build_message(smtp_config, user, tz_name=args.tz)
                 send_email(smtp_config, message)
             database.mark_email_sent(

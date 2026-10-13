@@ -173,6 +173,8 @@ def store_snapshot(
         """,
         (created_at, days, ticket_limit, len(users), len(tickets)),
     )
+    if cur.lastrowid is None:
+        raise RuntimeError("INSERT do snapshot não retornou rowid.")
     snapshot_id = int(cur.lastrowid)
     conn.executemany(
         """

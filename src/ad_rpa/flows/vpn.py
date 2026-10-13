@@ -344,6 +344,8 @@ def process_ticket(
             database.save_vpn_state(db_conn, ticket.id, "message_pending", ticket.login,
                                           state["planned_expiry"], state["glpi_message"])
             state = database.get_vpn_state(db_conn, ticket.id)
+            if state is None:
+                raise RuntimeError("Estado VPN ausente após atualizar para message_pending.")
         if state["stage"] in {"message_pending", "close_pending"}:
             _finish_ticket(ticket, glpi, db_conn, solution=True, action="renewed")
             print("Retomada do GLPI concluída sem reaplicar a renovação no AD.")
@@ -379,6 +381,8 @@ def process_ticket(
         print("Chamado encerrado no GLPI (acesso não expirado).")
         print("Nada a aplicar no AD.")
         return
+    if decision.new_expiry is None:
+        raise RuntimeError("Não há nova expiração calculada.")
     solution = (
         "Acessos renovados por mais 3 meses.\n\n"
         f"Expira em: {decision.new_expiry.astimezone(ad.ZoneInfo(tz_name)).strftime('%d/%m/%Y')}.\n\n"

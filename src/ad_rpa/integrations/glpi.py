@@ -276,8 +276,11 @@ class GlpiClient:
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            raw_formanswer_id = row.get("2")
+            if raw_formanswer_id is None:
+                continue
             try:
-                formanswer_id = int(row.get("2"))
+                formanswer_id = int(raw_formanswer_id)
             except (TypeError, ValueError):
                 continue
             linked_items = self.request(
@@ -291,8 +294,11 @@ class GlpiClient:
             for item in linked_items:
                 if not isinstance(item, dict):
                     continue
+                raw_ticket_id = item.get("tickets_id")
+                if raw_ticket_id is None:
+                    continue
                 try:
-                    ticket_id = int(item.get("tickets_id"))
+                    ticket_id = int(raw_ticket_id)
                 except (TypeError, ValueError):
                     continue
                 if ticket_id in seen_ticket_ids:

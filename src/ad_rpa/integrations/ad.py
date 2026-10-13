@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 from ldap3 import ALL, MODIFY_REPLACE, SUBTREE, Connection, Server, Tls
-from ldap3.core.exceptions import LDAPException
+from ldap3.core.exceptions import LDAPException as LDAPException
 from ldap3.utils.conv import escape_filter_chars
 FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 @dataclass
